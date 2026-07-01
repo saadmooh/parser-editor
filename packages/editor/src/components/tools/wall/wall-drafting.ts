@@ -1,0 +1,601 @@
+import {
+  type AnyNode,
+  type AnyNodeId,
+  DEFAULT_ANGLE_STEP,
+  type DoorNode,
+  getScaledDimensions,
+  type ItemNode,
+  isCurvedWall,
+  snapPointAlongAngleRay,
+  useScene,
+  type WallNode,
+  WallNode as WallSchema,
+  type WindowNode,
+} from '@pascal-app/core'
+import { useViewer } from '@pascal-app/viewer'
+import { sfxEmitter } from '../../../lib/sfx-bus'
+import { resolveSnapFlags } from '../../../lib/snapping-mode'
+import useEditor, { getActiveSnappingMode, isMagneticSnapActive } from '../../../store/use-editor'
+import {
+  distanceSquared,
+  findWallSnapTarget,
+  findWallSpecialPointSnap,
+  projectPointOntoWall,
+  WALL_JOIN_SNAP_RADIUS,
+  type WallDraftSnapResult,
+  type WallPlanPoint,
+  type WallSnapRadii,
+} from './wall-snap-geometry'
+
+// The pure snap geometry lives in `./wall-snap-geometry`; re-exported here so
+// existing importers (fence drafting, the editor barrel) keep their paths.
+export {
+  findWallSnapTarget,
+  WALL_JOIN_SNAP_RADIUS,
+  type WallDraftSnapKind,
+  type WallDraftSnapResult,
+  type WallPlanPoint,
+  type WallSnapRadii,
+} from './wall-snap-geometry'
+
+export const WALL_GRID_STEP = 0.5
+export const WALL_MIN_LENGTH = 0.01
+// An endpoint projecting within this distance of an existing wall's corner
+// resolves to the corner without splitting — splitting there would mint a
+// sliver segment a hair longer than `WALL_MIN_LENGTH` that no snap radius
+// can ever target again.
+const WALL_SPLIT_ENDPOINT_EPSILON = 0.02
+
+type WallSplitIntersection = {
+  /** `null` = snap-only outcome: resolve to `point` but split no wall. */
+  wallId: WallNode['id'] | null
+  point: WallPlanPoint
+}
+
+export function getSegmentGridStep(): number {
+  // A 0 step means "no grid lattice" — every grid-snap consumer guards on
+  // `step <= 0` and returns the raw value, so disabling grid here suppresses
+  // the lattice for walls, fences, and every node move/affordance that reads
+  // this choke point, without retuning their snap math.
+  return resolveSnapFlags(getActiveSnappingMode()).grid ? useEditor.getState().gridSnapStep : 0
+}
+
+export function snapScalarToGrid(value: number, step = WALL_GRID_STEP): number {
+  if (step <= 0) return value
+  return Math.round(value / step) * step
+}
+
+export function snapPointToGrid(point: WallPlanPoint, step = WALL_GRID_STEP): WallPlanPoint {
+  return [snapScalarToGrid(point[0], step), snapScalarToGrid(point[1], step)]
+}
+
+function splitWallAtPoint(wall: WallNode, splitPoint: WallPlanPoint): [WallNode, WallNode] {
+   const { id: _id, parentId: _parentId, children, ...rest } = wall
+
+   const first = WallSchema.parse({
+     ...rest,
+     start: wall.start,
+     end: splitPoint,
+     children: [],
+   })
+   const second = WallSchema.parse({
+     ...rest,
+     start: splitPoint,
+     end: wall.end,
+     children: [],
+   })
+
+   return [first, second]
+ }
+
+/**
+ * Check if both points project onto the same existing wall segment.
+ * Returns the wall and the two projected points, or null.
+ */
+function findWallContainingBothPoints(
+   pointA: WallPlanPoint,
+   pointB: WallPlanPoint,
+   walls: WallNode[],
+   ignoreWallIds?: string[],
+): { wall: WallNode; projectedA: WallPlanPoint; projectedB: WallPlanPoint } | null {
+   const ignore = new Set(ignoreWallIds ?? [])
+   
+   for (const wall of walls) {
+     if (ignore.has(wall.id)) continue
+     if (isCurvedWall(wall)) continue // curved walls handled separately
+     
+     const projectedA = projectPointOntoWall(pointA, wall)
+     const projectedB = projectPointOntoWall(pointB, wall)
+     
+     if (!projectedA || !projectedB) continue
+     
+     // Both points must be on this wall (within tolerance)
+     const distA = distanceSquared(pointA, projectedA)
+     const distB = distanceSquared(pointB, projectedB)
+     const toleranceSq = WALL_JOIN_SNAP_RADIUS * WALL_JOIN_SNAP_RADIUS
+     
+     if (distA <= toleranceSq && distB <= toleranceSq) {
+       return { wall, projectedA, projectedB }
+     }
+   }
+   
+   return null
+ }
+
+/**
+ * Split a wall at two points, producing up to 3 segments.
+ * The middle segment inherits the original wall's name and properties.
+ * The outer segments get new names.
+ */
+function splitWallAtTwoPoints(
+   wall: WallNode,
+   splitPointA: WallPlanPoint,
+   splitPointB: WallPlanPoint,
+): [WallNode | null, WallNode, WallNode | null] {
+   // Ensure order: A is closer to wall.start
+   const distToA = Math.hypot(splitPointA[0] - wall.start[0], splitPointA[1] - wall.start[1])
+   const distToB = Math.hypot(splitPointB[0] - wall.start[0], splitPointB[1] - wall.start[1])
+
+   let firstPoint: WallPlanPoint = splitPointA
+   let secondPoint: WallPlanPoint = splitPointB
+
+   if (distToB < distToA) {
+     firstPoint = splitPointB
+     secondPoint = splitPointA
+   }
+
+   const lenAStart = Math.hypot(firstPoint[0] - wall.start[0], firstPoint[1] - wall.start[1])
+   const lenAB = Math.hypot(secondPoint[0] - firstPoint[0], secondPoint[1] - firstPoint[1])
+   const lenBEnd = Math.hypot(wall.end[0] - secondPoint[0], wall.end[1] - secondPoint[1])
+
+   // If any segment would be too short, don't split
+   if (lenAStart < WALL_MIN_LENGTH || lenAB < WALL_MIN_LENGTH || lenBEnd < WALL_MIN_LENGTH) {
+     return [null, wall, null]
+   }
+
+   // Split at point A first
+   const [wallA1, wallA2] = splitWallAtPoint(wall, firstPoint)
+   // Then split the second part at point B
+   const [middle, wallB2] = splitWallAtPoint(wallA2, secondPoint)
+
+   // The middle segment keeps the original wall's name and properties
+   middle.name = wall.name
+
+   return [wallA1, middle, wallB2]
+ }
+
+function pointsEqual(a: WallPlanPoint, b: WallPlanPoint, tolerance = 1e-6): boolean {
+  return distanceSquared(a, b) <= tolerance * tolerance
+}
+
+function findWallIntersection(
+  point: WallPlanPoint,
+  walls: WallNode[],
+  ignoreWallIds?: string[],
+): WallSplitIntersection | null {
+  const ignore = new Set(ignoreWallIds ?? [])
+  let best: WallSplitIntersection | null = null
+  let bestDistanceSquared = Number.POSITIVE_INFINITY
+
+  for (const wall of walls) {
+    if (ignore.has(wall.id)) continue
+
+    const projected = projectPointOntoWall(point, wall)
+    if (!projected) continue
+
+    const candidateDistanceSquared = distanceSquared(point, projected)
+    if (
+      candidateDistanceSquared > WALL_JOIN_SNAP_RADIUS * WALL_JOIN_SNAP_RADIUS ||
+      candidateDistanceSquared >= bestDistanceSquared
+    ) {
+      continue
+    }
+
+    const nearCorner = ([wall.start, wall.end] as WallPlanPoint[]).find(
+      (corner) =>
+        distanceSquared(projected, corner) <=
+        WALL_SPLIT_ENDPOINT_EPSILON * WALL_SPLIT_ENDPOINT_EPSILON,
+    )
+    best = nearCorner
+      ? { wallId: null, point: [nearCorner[0], nearCorner[1]] }
+      : { wallId: wall.id, point: projected }
+    bestDistanceSquared = candidateDistanceSquared
+  }
+
+  return best
+}
+
+function wallHasAttachments(wall: WallNode, nodes: ReturnType<typeof useScene.getState>['nodes']) {
+  if ((wall.children?.length ?? 0) > 0) {
+    return true
+  }
+
+  return Object.values(nodes).some((node) => {
+    if (!node) return false
+    if ('parentId' in node && node.parentId === wall.id) return true
+    if ('wallId' in node && typeof node.wallId === 'string' && node.wallId === wall.id) return true
+    return false
+  })
+}
+
+function wallLength(wall: Pick<WallNode, 'start' | 'end'>) {
+  return Math.hypot(wall.end[0] - wall.start[0], wall.end[1] - wall.start[1])
+}
+
+function getWallAttachmentSpan(node: AnyNode): { min: number; max: number; center: number } | null {
+  if (node.type === 'door') {
+    const door = node as DoorNode
+    return {
+      min: door.position[0] - door.width / 2,
+      max: door.position[0] + door.width / 2,
+      center: door.position[0],
+    }
+  }
+
+  if (node.type === 'window') {
+    const win = node as WindowNode
+    return {
+      min: win.position[0] - win.width / 2,
+      max: win.position[0] + win.width / 2,
+      center: win.position[0],
+    }
+  }
+
+  if (node.type === 'item') {
+    const item = node as ItemNode
+    if (item.asset.attachTo !== 'wall' && item.asset.attachTo !== 'wall-side') {
+      return null
+    }
+
+    const [width] = getScaledDimensions(item)
+    return {
+      min: item.position[0] - width / 2,
+      max: item.position[0] + width / 2,
+      center: item.position[0],
+    }
+  }
+
+  return null
+}
+
+function remapAttachmentToWall(
+  node: AnyNode,
+  nextWallId: WallNode['id'],
+  nextLocalX: number,
+  nextWallLength: number,
+): Partial<AnyNode> | null {
+  const clampedX = Math.max(0, Math.min(nextWallLength, nextLocalX))
+
+  if (node.type === 'door' || node.type === 'window' || node.type === 'item') {
+    const currentPosition = 'position' in node ? node.position : null
+    if (!currentPosition) return null
+
+    const nextPosition: typeof currentPosition = [
+      clampedX,
+      currentPosition[1],
+      currentPosition[2],
+    ] as typeof currentPosition
+
+    return {
+      parentId: nextWallId,
+      position: nextPosition,
+      ...(node.type === 'item'
+        ? {
+            wallId: nextWallId,
+            wallT: nextWallLength > 1e-6 ? clampedX / nextWallLength : 0,
+          }
+        : {
+            wallId: nextWallId,
+          }),
+    } as Partial<AnyNode>
+  }
+
+  return null
+}
+
+function buildAttachmentMigrationPlan(
+  wall: WallNode,
+  splitPoint: WallPlanPoint,
+  firstWall: WallNode,
+  secondWall: WallNode,
+  nodes: ReturnType<typeof useScene.getState>['nodes'],
+): { id: AnyNodeId; data: Partial<AnyNode> }[] | null {
+  const splitDistance = Math.hypot(splitPoint[0] - wall.start[0], splitPoint[1] - wall.start[1])
+  const firstLength = wallLength(firstWall)
+  const secondLength = wallLength(secondWall)
+  const tolerance = 1e-4
+  const updates: { id: AnyNodeId; data: Partial<AnyNode> }[] = []
+
+  for (const childId of wall.children ?? []) {
+    const childNode = nodes[childId as AnyNodeId]
+    if (!childNode) continue
+
+    const span = getWallAttachmentSpan(childNode)
+    if (!span) {
+      return null
+    }
+
+    if (span.max <= splitDistance + tolerance) {
+      const nextUpdate = remapAttachmentToWall(childNode, firstWall.id, span.center, firstLength)
+      if (!nextUpdate) return null
+      updates.push({ id: childNode.id as AnyNodeId, data: nextUpdate })
+      continue
+    }
+
+    if (span.min >= splitDistance - tolerance) {
+      const nextUpdate = remapAttachmentToWall(
+        childNode,
+        secondWall.id,
+        span.center - splitDistance,
+        secondLength,
+      )
+      if (!nextUpdate) return null
+      updates.push({ id: childNode.id as AnyNodeId, data: nextUpdate })
+      continue
+    }
+
+    return null
+  }
+
+  return updates
+}
+
+function splitWallIfNeeded(
+  intersection: WallSplitIntersection | null,
+  walls: WallNode[],
+  nodes: ReturnType<typeof useScene.getState>['nodes'],
+  createNodes: ReturnType<typeof useScene.getState>['createNodes'],
+  updateNodes: ReturnType<typeof useScene.getState>['updateNodes'],
+  deleteNode: ReturnType<typeof useScene.getState>['deleteNode'],
+): { walls: WallNode[]; point: WallPlanPoint } | null {
+  if (!intersection) return null
+
+  if (!intersection.wallId) {
+    return { walls, point: intersection.point }
+  }
+
+  const wallToSplit = walls.find((wall) => wall.id === intersection.wallId)
+  if (!wallToSplit) {
+    return { walls, point: intersection.point }
+  }
+
+  const [first, second] = splitWallAtPoint(wallToSplit, intersection.point)
+  const attachmentUpdates = buildAttachmentMigrationPlan(
+    wallToSplit,
+    intersection.point,
+    first,
+    second,
+    nodes,
+  )
+
+  if (wallHasAttachments(wallToSplit, nodes) && !attachmentUpdates) {
+    return { walls, point: intersection.point }
+  }
+
+  createNodes([
+    { node: first, parentId: wallToSplit.parentId as AnyNodeId | undefined },
+    { node: second, parentId: wallToSplit.parentId as AnyNodeId | undefined },
+  ])
+  if (attachmentUpdates && attachmentUpdates.length > 0) {
+    updateNodes(attachmentUpdates)
+  }
+  deleteNode(wallToSplit.id as AnyNodeId)
+
+  return {
+    walls: [...walls.filter((wall) => wall.id !== wallToSplit.id), first, second],
+    point: intersection.point,
+  }
+}
+
+type SnapWallDraftArgs = {
+  point: WallPlanPoint
+  walls: WallNode[]
+  start?: WallPlanPoint
+  angleSnap?: boolean
+  ignoreWallIds?: string[]
+  bypassSnap?: boolean
+  /** Override the grid step. */
+  step?: number
+  /**
+   * Magnetic snapping to existing wall geometry (corners, midpoints,
+   * crossings, wall bodies). When `false`, only grid/angle snap applies and
+   * `snap` is always `null`. Defaults to `true` so callers that don't care
+   * keep the prior behaviour.
+   */
+  magnetic?: boolean
+  /**
+   * Optional grid-snap override. Lets the caller route grid snapping
+   * through a world-XZ aligned snap (so a rotated building's draft
+   * lands on the visible grid). When omitted, falls back to the
+   * local-axis grid at `step`.
+   */
+  gridSnap?: (point: WallPlanPoint) => WallPlanPoint
+  /** Optional magnetic snap radii. Omitted means wall tools keep their defaults. */
+  snapRadii?: WallSnapRadii
+}
+
+export function snapWallDraftPointDetailed(args: SnapWallDraftArgs): WallDraftSnapResult {
+  const {
+    point,
+    walls,
+    start,
+    angleSnap = false,
+    ignoreWallIds,
+    bypassSnap = false,
+    step: overrideStep,
+    magnetic = true,
+    gridSnap,
+    snapRadii,
+  } = args
+
+  if (bypassSnap) return { point, snap: null }
+
+  // Discrete special points (corner / midpoint / crossing) are taken from the
+  // raw cursor so an interim grid snap can't mask them. A corner always wins,
+  // then the nearer of midpoint / crossing — see `findWallSpecialPointSnap`.
+  if (magnetic) {
+    const special = findWallSpecialPointSnap(point, walls, ignoreWallIds, snapRadii)
+    if (special) return special
+  }
+
+  const step = overrideStep ?? getSegmentGridStep()
+  // The angle path snaps the distance ALONG the 15° ray — a scalar, the
+  // same in world and local frames — so the `gridSnap` world-grid override
+  // only applies when the angle lock is off.
+  const basePoint: WallPlanPoint =
+    start && angleSnap
+      ? [...snapPointAlongAngleRay(start, point, DEFAULT_ANGLE_STEP, step)]
+      : gridSnap
+        ? gridSnap(point)
+        : snapPointToGrid(point, step)
+
+  if (magnetic) {
+    const wallSnap = findWallSnapTarget(basePoint, walls, {
+      ignoreWallIds,
+      radius: snapRadii?.wall,
+    })
+    if (wallSnap) return { point: wallSnap, snap: 'wall' }
+  }
+
+  return { point: basePoint, snap: null }
+}
+
+export function snapWallDraftPoint(args: SnapWallDraftArgs): WallPlanPoint {
+  return snapWallDraftPointDetailed(args).point
+}
+
+export function isSegmentLongEnough(start: WallPlanPoint, end: WallPlanPoint): boolean {
+  return distanceSquared(start, end) >= WALL_MIN_LENGTH * WALL_MIN_LENGTH
+}
+
+export function createWallOnCurrentLevel(
+  start: WallPlanPoint,
+  end: WallPlanPoint,
+): WallNode | null {
+  const currentLevelId = useViewer.getState().selection.levelId
+  const { createNode, createNodes, deleteNode, nodes } = useScene.getState()
+  const { updateNodes } = useScene.getState()
+
+  if (!(currentLevelId && isSegmentLongEnough(start, end))) {
+    return null
+  }
+
+  let workingWalls = Object.values(nodes).filter(
+    (node): node is WallNode => node?.type === 'wall' && node.parentId === currentLevelId,
+  )
+
+  let resolvedStart = start
+  let resolvedEnd = end
+
+    // If both endpoints land on the same wall, split that wall
+    // instead of creating a new overlapping wall. This is a semantic rule
+    // (no duplicate walls) that applies regardless of snapping mode.
+    const sameWallResult = findWallContainingBothPoints(
+      resolvedStart, resolvedEnd, workingWalls,
+    )
+    if (sameWallResult) {
+      const { wall: wallToSplit, projectedA, projectedB } = sameWallResult
+
+      // Don't split if the two points are essentially the same
+      if (!pointsEqual(projectedA, projectedB)) {
+        const [first, middle, third] = splitWallAtTwoPoints(
+          wallToSplit,
+          projectedA,
+          projectedB,
+        )
+
+        // Handle attachment migration for the first split
+        const firstSegment = first ?? WallSchema.parse({
+          ...wallToSplit, start: wallToSplit.start, end: projectedA, children: [],
+        })
+        const attachmentUpdates = buildAttachmentMigrationPlan(
+          wallToSplit,
+          projectedA,
+          firstSegment,
+          middle,
+          nodes,
+        )
+
+        const validSegments = [first, middle, third].filter(Boolean) as WallNode[]
+
+        if (wallHasAttachments(wallToSplit, nodes) && !attachmentUpdates) {
+          // Can't migrate attachments, fall back to normal behavior
+        } else {
+          createNodes(validSegments.map(node => ({
+            node: node,
+            parentId: wallToSplit.parentId as AnyNodeId | undefined,
+          })))
+
+          if (attachmentUpdates && attachmentUpdates.length > 0) {
+            updateNodes(attachmentUpdates)
+          }
+
+          deleteNode(wallToSplit.id as AnyNodeId)
+
+          return middle
+        }
+      }
+    }
+
+    // The corner-join / wall-split snap on commit is a magnetic (line) snap, so
+    // it must be gated by the snapping mode like the draft preview is.
+    if (isMagneticSnapActive()) {
+      const endIntersection = findWallIntersection(resolvedEnd, workingWalls)
+     const splitEnd = splitWallIfNeeded(
+       endIntersection,
+       workingWalls,
+       nodes,
+       createNodes,
+       updateNodes,
+       deleteNode,
+     )
+     if (splitEnd) {
+       workingWalls = splitEnd.walls
+       resolvedEnd = splitEnd.point
+     }
+
+     const startIntersection = findWallIntersection(resolvedStart, workingWalls)
+     const splitStart = splitWallIfNeeded(
+       startIntersection,
+       workingWalls,
+       nodes,
+       createNodes,
+       updateNodes,
+       deleteNode,
+     )
+     if (splitStart) {
+       workingWalls = splitStart.walls
+       resolvedStart = splitStart.point
+     }
+   }
+
+  if (!isSegmentLongEnough(resolvedStart, resolvedEnd) || pointsEqual(resolvedStart, resolvedEnd)) {
+    return null
+  }
+
+  const duplicateWall = workingWalls.some(
+    (wall) =>
+      (pointsEqual(wall.start, resolvedStart) && pointsEqual(wall.end, resolvedEnd)) ||
+      (pointsEqual(wall.start, resolvedEnd) && pointsEqual(wall.end, resolvedStart)),
+  )
+  if (duplicateWall) {
+    return null
+  }
+
+  const wallCount = Object.values(nodes).filter((node) => node.type === 'wall').length
+  // A placed wall preset seeds `toolDefaults.wall` (thickness, height,
+  // materials, sides) before the tool activates; merge those first so the
+  // drawn wall reproduces the preset. Identity + endpoints always win.
+  const defaults = useEditor.getState().toolDefaults.wall ?? {}
+  const wall = WallSchema.parse({
+    ...defaults,
+    name: `Wall ${wallCount + 1}`,
+    start: resolvedStart,
+    end: resolvedEnd,
+  })
+
+  createNode(wall, currentLevelId)
+  sfxEmitter.emit('sfx:structure-build')
+
+  return wall
+}
