@@ -26,6 +26,7 @@ import useInteractionScope, {
   useActiveHandleDrag,
   useMovingNode,
 } from '../../../store/use-interaction-scope'
+import useWallSplitMode from '../../../store/use-wall-split-mode'
 import { BuildingHelper } from './building-helper'
 import { ContextualHelperPanel } from './contextual-helper-panel'
 import { ItemHelper } from './item-helper'
@@ -99,6 +100,7 @@ export function HelperManager() {
   const selectedIds = useViewer((s) => s.selection.selectedIds)
   const isMobile = useIsMobile()
   const modifiers = useActiveModifierKeys()
+  const wallSplitMode = useWallSplitMode((s) => s.enabled)
   const selectedNodes = useScene(
     useShallow((s) =>
       selectedIds
@@ -212,6 +214,7 @@ export function HelperManager() {
           hints={hints}
           shiftPressed={modifiers.shift}
           snapContext={snapContext}
+          wallSplitMode={tool === 'wall' ? wallSplitMode : false}
         />
       )
     }

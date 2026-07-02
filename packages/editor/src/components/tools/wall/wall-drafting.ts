@@ -471,6 +471,7 @@ export function isSegmentLongEnough(start: WallPlanPoint, end: WallPlanPoint): b
 export function createWallOnCurrentLevel(
   start: WallPlanPoint,
   end: WallPlanPoint,
+  options?: { splitKeyHeld?: boolean },
 ): WallNode | null {
   const currentLevelId = useViewer.getState().selection.levelId
   const { createNode, createNodes, deleteNode, nodes } = useScene.getState()
@@ -488,12 +489,18 @@ export function createWallOnCurrentLevel(
   let resolvedEnd = end
 
     // If both endpoints land on the same wall, split that wall
-    // instead of creating a new overlapping wall. This is a semantic rule
-    // (no duplicate walls) that applies regardless of snapping mode.
+    // instead of creating a new overlapping wall.
+    // Requires O key held (splitKeyHeld) to activate.
     const sameWallResult = findWallContainingBothPoints(
       resolvedStart, resolvedEnd, workingWalls,
     )
     if (sameWallResult) {
+      // O key required for split-on-overlap activation
+      if (!options?.splitKeyHeld) {
+        // No O key → no creation, no split, just return null
+        return null
+      }
+
       const { wall: wallToSplit, projectedA, projectedB } = sameWallResult
 
       // Don't split if the two points are essentially the same

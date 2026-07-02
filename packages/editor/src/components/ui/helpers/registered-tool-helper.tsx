@@ -18,11 +18,13 @@ export function RegisteredToolHelper({
   shiftPressed = false,
   snapContext = null,
   continuationContext = null,
+  wallSplitMode = false,
 }: {
   hints: ToolHint[]
   shiftPressed?: boolean
   snapContext?: SnapContext | null
   continuationContext?: ContinuationContext | null
+  wallSplitMode?: boolean
 }) {
   // Live vertex count of an in-progress polygon draft, so hints gated on a
   // minimum (e.g. "Finish" at ≥ 3) only appear once they're actually possible.
@@ -39,13 +41,17 @@ export function RegisteredToolHelper({
   return (
     <ContextualHelperPanel
       hints={visible.map((hint) => {
-        // Shift is a per-kind bypass for opening / zone / duct placement ("Free
-        // place", "Free angle", …) — those flip to a bypassed state while held.
         const isBypassHint = hint.key === 'Shift'
+        const isSplitHint = hint.key === 'O'
         return {
           keys: [hint.key],
-          label: shiftPressed && isBypassHint ? 'Guided constraints bypassed' : hint.label,
-          active: shiftPressed && isBypassHint,
+          label:
+            shiftPressed && isBypassHint
+              ? 'Guided constraints bypassed'
+              : isSplitHint && wallSplitMode
+                ? 'Split-on-overlap: ON'
+                : hint.label,
+          active: (shiftPressed && isBypassHint) || (isSplitHint && wallSplitMode),
         }
       })}
       continuationContext={continuationContext}

@@ -412,3 +412,4 @@ export {
   type WallSnapKind,
   type WallSnapPoint,
 } from './store/use-wall-snap-indicator'
+export { default as useWallSplitMode } from './store/use-wall-split-mode'

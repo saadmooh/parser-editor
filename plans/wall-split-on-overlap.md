@@ -1,4 +1,4 @@
-# خطة: تقسيم الجدار عند الرسم عليه بدلاً من إنشاء جدار جديد
+# خطة: تقسيم الجدار عند الرسم عليه (بمفتاح O)
 
 ## المشكلة الحالية
 
@@ -9,15 +9,30 @@
 
 النتيجة: جدران متراكبة بدلاً من تقسيم نظيف.
 
-## السلوك المطلوب
+## السلوك المطلوب — مفتاح O كمحرّك (Toggle)
 
-عندما تكون كلتا النقطتين (البداية والنهاية) على **نفس الجدار** (ضمن مجال سماح):
+### كيفية العمل
+- الضغط على `O` يحوّل بين وضعين: **مفعّل** و**معطّل**
+- عند التفعيل: يظهر في لوحة المساعدة "Split-on-overlap: ON" بلون مميز
+- عند التعطيل: يعود للنص الأصلي "Toggle split-on-overlap mode"
+- الحالة تبقى محفوظة حتى يضغط `O` مرة أخرى أو يخرج من أداة الجدران
+
+### السيناريو 1: المستخدم يفعّل وضع التقسيم (O) ثم يرسم على نفس الجدار
 - تقسيم الجدار الأصلي إلى **3 أجزاء**:
   1. الجزء الأول (قبل نقطة البداية) → جدار جديد
   2. الجزء الأوسط (بين النقطتين) → **يحتفظ باسم الجدار الأصلي** وخصائصه
   3. الجزء الثالث (بعد نقطة النهاية) → جدار جديد
 - **لا يُنشئ جداراً جديداً** (الجزء الأوسط هو نفسه "الجدار الجديد" المطلوب)
 - مجال السماح: 0.35م (نفس `WALL_JOIN_SNAP_RADIUS`)
+
+### السيناريو 2: المستخدم يرسم على نفس الجدار بدون تفعيل وضع التقسيم
+- **لا يُنشئ جداراً جديداً** فوق الجدار القديم
+- **لا يقسم الجدار** ولا يعدّل عليه
+- **يعرض فقط الـ preview wall** كما هو معتاد
+- عند النقر الثاني: **لا يحدث شيء** — سلسلة الرسم تستمر بشكل طبيعي
+
+### السيناريو 3: النقاط على جدران مختلفة (أو لا يوجد جدار)
+- السلوك الحالي كما هو — إنشاء جدار جديد عادي بغض النظر عن حالة O
 
 ## الملفات المطلوب تعديلها
 
@@ -77,34 +92,128 @@ if (isMagneticSnapActive()) {
 
 ### 2. `packages/nodes/src/wall/tool.tsx`
 
-**تعديل `onGridClick` لإظهار الـ preview دائماً:**
+**تعديل `onGridClick` لإظهار الـ preview وتمرير حالة O:**
 
-الكود الحالي يختفي الـ preview بعد النقر الثاني. يجب تعديله لإظهار الـ preview دائماً أثناء الرسم، حتى عند التقسيم.
+يجب تتبع مفتاح O في `keyStates` (السطر ~300+) وإضافته كمعامل لـ `createWallOnCurrentLevel`.
+
+**إضافة تتبع مفتاح O:**
+
+في `onKeyDown`، أضف:
+```typescript
+if (event.code === 'KeyO') {
+  keyStates.current.set('KeyO', true)
+}
+```
+
+في `onKeyUp`، أضف:
+```typescript
+if (event.code === 'KeyO') {
+  keyStates.current.set('KeyO', false)
+}
+```
+
+**تعديل استدعاء `createWallOnCurrentLevel`:**
+
+```typescript
+const createdWall = createWallOnCurrentLevel(
+  [startingPoint.current.x, startingPoint.current.z],
+  snappedEnd,
+  { splitKeyHeld: keyStates.current.get('KeyO') === true },
+)
+```
+
+**الكود الحالي (بعد الإنشاء):**
+```typescript
+if (!createdWall) return  // ← هنا يختفي الـ preview
+
+// ... بعد الإنشاء الناجح
+if (wallPreviewRef.current) {
+  wallPreviewRef.current.visible = false  // ← هنا أيضاً
+}
+```
+
+**الكود المعدل:**
+```typescript
+const createdWall = createWallOnCurrentLevel(
+  [startingPoint.current.x, startingPoint.current.z],
+  snappedEnd,
+  { splitKeyHeld: keyStates.current.get('KeyS') === true },
+)
+
+// Keep the preview visible even when not creating (no O key or split)
+if (!createdWall) {
+  // Don't return early - keep preview visible for chain continuation
+  refreshAlignmentCandidates()
+  useAlignmentGuides.getState().clear()
+  useWallSnapIndicator.getState().clear()
+
+  if (useEditor.getState().getContinuation('wall') === 'single') {
+    stopDrafting()
+    return
+  }
+
+  // Reset for next segment
+  const nextStart = snappedEnd
+  useSegmentDraftChain.getState().setChainStart('wall', [nextStart[0], nextStart[1]])
+  startingPoint.current.set(nextStart[0], event.localPosition[1], nextStart[1])
+  endingPoint.current.copy(startingPoint.current)
+  cursorRef.current?.position.copy(startingPoint.current)
+  buildingState.current = 1
+  setAxisGuide({ origin: nextStart, y: event.localPosition[1], angleLabel: null })
+
+  // Update preview to show the next segment
+  updateWallPreview(
+    wallPreviewRef.current,
+    startingPoint.current,
+    endingPoint.current,
+    previewHeightRef.current,
+    previewThicknessRef.current,
+  )
+  return
+}
+
+// Existing successful creation flow continues...
+```
 
 ### 3. `packages/editor/src/components/tools/wall/wall-drafting.test.ts`
 
 **إضافة اختبارات جديدة:**
 
 ```typescript
-test('drawing from one point on a wall to another point on the same wall splits it into 3', () => {
+test('O + LMB: drawing from one point on a wall to another point on the same wall splits it into 3', () => {
   // Existing wall from [0,0] to [4,0]
-  // Draw from [1,0] to [3,0]
+  // User holds O, draws from [1,0] to [3,0]
   // Result: 3 walls:
   //   [0,0]->[1,0] (new)
   //   [1,0]->[3,0] (keeps original name "wall_a")
   //   [3,0]->[4,0] (new)
 })
 
-test('drawing from one point to the same point on a wall is rejected (too short)', () => {
+test('LMB without O: drawing on same wall does NOT create or split — returns null', () => {
+  // Existing wall from [0,0] to [4,0]
+  // User does NOT hold O, draws from [1,0] to [3,0]
+  // Result: no new wall created, no split, function returns null
+  // Preview continues to show as usual
+})
+
+test('O + LMB: drawing from one point to the same point on a wall is rejected (too short)', () => {
   // Both points project to nearly the same spot → segment too short
 })
 
-test('drawing from wall A to wall B creates a new wall (not a split)', () => {
+test('drawing from wall A to wall B creates a new wall (not a split) regardless of O', () => {
   // Points on different walls → normal creation behavior
+  // O key has no effect when points are on different walls
 })
 
-test('tolerance: points slightly off the wall still trigger the split', () => {
+test('tolerance: points slightly off the wall still trigger the split with O held', () => {
   // Points are 0.2m away from the wall line but within snap radius
+  // O key is held → split happens
+})
+
+test('preview remains visible when LMB without O on same wall', () => {
+  // After click, preview wall stays visible
+  // No wall is created or split
+  // User can continue drawing chain from the click point
 })
 ```
 
@@ -184,12 +293,19 @@ function splitWallAtTwoPoints(
 في السطر ~417، بعد فحص `isMagneticSnapActive()`، نضيف فحصاً جديداً:
 
 ```typescript
-// NEW: If both endpoints land on the same wall, split that wall
-// instead of creating a new overlapping wall.
+// NEW: If both endpoints land on the same wall and O key is held, split that wall.
+// If O is NOT held, return null to skip creation (no overlapping wall, no split).
 const sameWallResult = findWallContainingBothPoints(
   resolvedStart, resolvedEnd, workingWalls,
 )
 if (sameWallResult) {
+  // O key required for split-on-overlap activation
+  if (!isSplitKeyHeld()) {
+    // No O key → no creation, no split, just return null
+    // (preview stays visible, user can continue drawing chain)
+    return null
+  }
+  
   const { wall: wallToSplit, projectedA, projectedB } = sameWallResult
   
   // Don't split if the two points are essentially the same
@@ -212,95 +328,59 @@ if (sameWallResult) {
 }
 ```
 
+**إضافة دالة مساعدة `isSplitKeyHeld()`:**
+
+```typescript
+/**
+ * Check if the O key is currently held down.
+ * Used to gate the split-on-overlap feature.
+ */
+function isSplitKeyHeld(): boolean {
+  return keyStates.current.get('KeyO') === true
+}
+```
+
+**ملاحظة:** `keyStates` هو الـ `Map` الذي يتتبع حالة المفاتيح في `tool.tsx`. يجب تمريره أو الوصول إليه من `createWallOnCurrentLevel`. البديل: تمرير boolean `splitKeyHeld` كمعامل إضافي لدالة `createWallOnCurrentLevel`.
+
 ## ترتيب التنفيذ
 
-1. **الخطوة 1**: إضافة دالة `findWallContainingBothPoints` في `wall-drafting.ts`
-2. **الخطوة 2**: إضافة دالة `splitWallAtTwoPoints` في `wall-drafting.ts`
-3. **الخطوة 3**: تعديل `createWallOnCurrentLevel` لاستخدام الدالتين الجديدين
-4. **الخطوة 4**: إضافة معالجة الـ attachments (أبواب/نوافذ) على الجدار المقسم
-5. **الخطوة 5**: تعديل `tool.tsx` لإظهار الـ preview دائماً أثناء الرسم
-6. **الخطوة 6**: إضافة اختبارات جديدة في `wall-drafting.test.ts`
-7. **الخطوة 7**: تشغيل الاختبارات والتحقق
+1. **الخطوة 1**: تتبع حالة مفتاح O في `tool.tsx` (إضافة `KeyO` إلى `keyStates`)
+2. **الخطوة 2**: تمرير حالة O إلى `createWallOnCurrentLevel` (معامل `splitKeyHeld?: boolean`)
+3. **الخطوة 3**: تعديل `createWallOnCurrentLevel` لفحص `splitKeyHeld` قبل التقسيم
+4. **الخطوة 4**: تعديل `onGridClick` في `tool.tsx` لتمرير حالة O وعرض الـ preview عند عدم الإنشاء
+5. **الخطوة 5**: إضافة اختبارات جديدة في `wall-drafting.test.ts`
+6. **الخطوة 6**: تشغيل الاختبارات والتحقق
 
 ## الميزة الثانية: إظهار الـ Preview دائماً أثناء الرسم
 
 ### المشكلة
 الآن، الـ preview (الجدار الأزرق الشفاف) يختفي بعد النقر الثاني إذا لم يتم إنشاء جدار جديد. المستخدم يريد أن يظهر الـ preview دائماً أثناء الرسم، حتى لو كنا سنقوم بتقسيم بدلاً من إنشاء.
 
+### السلوك المطلوب
+- عند LMB بدون O على نفس الجدار: **لا إنشاء، لا تقسيم** — فقط عرض الـ preview واستمرار سلسلة الرسم
+- عند O + LMB على نفس الجدار: **تقسيم** — عرض الـ preview ثم تنفيذ التقسيم
+- في كلتا الحالتين: الـ preview يظهر دائماً
+
 ### الملف المطلوب تعديله
 `packages/nodes/src/wall/tool.tsx`
 
-### التعديل المطلوب
+### التعديلات المطلوبة
 
-في دالة `onGridClick` (السطر ~712-779)، بعد استدعاء `createWallOnCurrentLevel`:
-
-**الكود الحالي:**
-```typescript
-const createdWall = createWallOnCurrentLevel(
-  [startingPoint.current.x, startingPoint.current.z],
-  snappedEnd,
-)
-if (!createdWall) return  // ← هنا يختفي الـ preview
-
-// ... بعد الإنشاء الناجح
-if (wallPreviewRef.current) {
-  wallPreviewRef.current.visible = false  // ← هنا أيضاً
-}
-```
-
-**الكود المعدل:**
-```typescript
-const createdWall = createWallOnCurrentLevel(
-  [startingPoint.current.x, startingPoint.current.z],
-  snappedEnd,
-)
-
-// Keep the preview visible even when splitting (no new wall created)
-// The preview shows where the split will happen
-if (!createdWall) {
-  // Don't return early - keep preview visible for split feedback
-  refreshAlignmentCandidates()
-  useAlignmentGuides.getState().clear()
-  useWallSnapIndicator.getState().clear()
-
-  if (useEditor.getState().getContinuation('wall') === 'single') {
-    stopDrafting()
-    return
-  }
-
-  // Reset for next segment
-  const nextStart = snappedEnd
-  useSegmentDraftChain.getState().setChainStart('wall', [nextStart[0], nextStart[1]])
-  startingPoint.current.set(nextStart[0], event.localPosition[1], nextStart[1])
-  endingPoint.current.copy(startingPoint.current)
-  cursorRef.current?.position.copy(startingPoint.current)
-  buildingState.current = 1
-  setAxisGuide({ origin: nextStart, y: event.localPosition[1], angleLabel: null })
-
-  // Update preview to show the next segment
-  updateWallPreview(
-    wallPreviewRef.current,
-    startingPoint.current,
-    endingPoint.current,
-    previewHeightRef.current,
-    previewThicknessRef.current,
-  )
-  return
-}
-
-// Existing successful creation flow continues...
-```
+1. تتبع مفتاح O في `keyStates` (onKeyDown/onKeyUp)
+2. تمرير `splitKeyHeld` إلى `createWallOnCurrentLevel`
+3. عند `!createdWall`: عدم الإرجاع المبكر، استمرار عرض الـ preview وسلسلة الرسم
 
 **الملاحظات:**
 - الـ preview يظهر دائماً أثناء الرسم (`buildingState.current === 1`)
-- عند التقسيم (لا إنشاء جديد)، الـ preview يظهر إلى أن ينتقل المستخدم للنقطة التالية
-- هذا يعطي للمستخدم تغذية بصرية واضحة عما سيحدث
+- عند LMB بدون O: لا يحدث شيء، الـ preview يبقى ظاهراً والمستخدم يكمل من النقطة التالية
+- عند O + LMB: التقسيم يحدث مع بقاء الـ preview للمرور التالي
 
 ## ملاحظات مهمة
 
-- **مجال السماح**: نستخدم `WALL_JOIN_SNAP_RADIUS` (0.35م) كما في الكود الحالي للتناغم
-- **الجدران المنحنية**: لا ندعم التقسيم المزدوج للجدران المنحنية حالياً (نحتفظ بالسلوك الحالي)
+- **مفتاح O**: يحوّل بين وضع التقسيم المفعّل والمعطّل. الحالة تظهر في لوحة المساعدة
+- **لوحة المساعدة**: تظهر "Split-on-overlap: ON" عندما يكون التقسيم مفعّلاً
+- **مجال السماح**: نستخدم `WALL_JOIN_SNAP_RADIUS` (0.35م) كما في الكود الحالي
+- **الجدران المنحنية**: لا ندعم التقسيم للجدران المنحنية حالياً
 - **الاسم**: الجزء الأوسط يحتفظ بالاسم الأصلي، الأجزاء الجانبية تحصل على اسم مع رقم
-- **الـ attachments**: يجب نقل الأبواب والنوافذ إلى القطعة الصحيحة بناءً على موقعها الأصلي
+- **الـ attachments**: يجب نقل الأبواب والنوافذ إلى القطعة الصحيحة
 - **التحقق من الطول**: الأجزاء الجانبية يجب أن تكون أطول من `WALL_MIN_LENGTH` وإلا تُتجاهل
-- **الـ Preview**: يظهر دائماً أثناء الرسم، حتى عند التقسيم بدلاً من الإنشاء

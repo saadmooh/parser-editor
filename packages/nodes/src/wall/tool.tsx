@@ -32,6 +32,7 @@ import {
   useEditor,
   useSegmentDraftChain,
   useWallSnapIndicator,
+  useWallSplitMode,
   WALL_JOIN_SNAP_RADIUS,
   type WallPlanPoint,
 } from '@pascal-app/editor'
@@ -731,6 +732,7 @@ export const WallTool: React.FC = () => {
         const createdWall = createWallOnCurrentLevel(
           [startingPoint.current.x, startingPoint.current.z],
           snappedEnd,
+          { splitKeyHeld: useWallSplitMode.getState().enabled },
         )
 
         // Keep the preview visible even when splitting (no new wall created)
@@ -819,10 +821,18 @@ export const WallTool: React.FC = () => {
     emitter.on('grid:click', onGridClick)
     emitter.on('tool:cancel', onCancel)
 
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code === 'KeyO') {
+        useWallSplitMode.getState().toggle()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+
     return () => {
       emitter.off('grid:move', onGridMove)
       emitter.off('grid:click', onGridClick)
       emitter.off('tool:cancel', onCancel)
+      window.removeEventListener('keydown', onKeyDown)
       useAlignmentGuides.getState().clear()
       useWallSnapIndicator.getState().clear()
       useSegmentDraftChain.getState().clear('wall')

@@ -118,6 +118,7 @@ export const wallDefinition: NodeDefinition<typeof WallNode> = {
 
   toolHints: [
     { key: 'Left click', label: 'Set wall start / end' },
+    { key: 'O', label: 'Toggle split-on-overlap mode' },
     { key: 'Esc', label: 'Cancel' },
   ],
 
