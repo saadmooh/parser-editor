@@ -172,6 +172,8 @@ import {
   type WallPlanPoint,
 } from '../tools/wall/wall-drafting'
 
+import { DimensionInput } from '../tools/shared/dimension-input'
+import { useDimensionDraftStore } from '../../lib/dimension-draft-store'
 import { PALETTE_COLORS } from '../ui/primitives/color-dot'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/primitives/tooltip'
 import { resolveFloorplanBackgroundSelection } from './floorplan-background-selection'
@@ -5134,6 +5136,7 @@ export function FloorplanPanel({
   // Shims keep the `setXDraftEnd(value | prev => …)` call sites unchanged.
   const [draftStart, setDraftStart] = useState<WallPlanPoint | null>(null)
   const [wallChainFirstVertex, setWallChainFirstVertex] = useState<WallPlanPoint | null>(null)
+  const cursorPoint = useFloorplanDraftPreview((s) => s.cursorPoint)
   const setDraftEnd = useCallback(
     (next: WallPlanPoint | null | ((prev: WallPlanPoint | null) => WallPlanPoint | null)) => {
       const store = useFloorplanDraftPreview.getState()
@@ -11148,6 +11151,14 @@ export function FloorplanPanel({
                   vectorEffect="non-scaling-stroke"
                 />
               )}
+
+              {/* Ghost walls for multi-point dimension drafting */}
+              <FloorplanDimensionGhostWalls
+                toSvgX={toSvgX}
+                toSvgY={toSvgY}
+                stroke={palette.draftStroke}
+                fill={palette.draftFill}
+              />
             </g>
             {isFloorplanNavigationOverlayVisible && (
               <rect
@@ -11162,7 +11173,120 @@ export function FloorplanPanel({
             )}
           </svg>
         ) : null}
+
+        {/* Dimension input overlay for 2D wall drafting */}
+        {isWallBuildActive && draftStart && (
+          <FloorplanDimensionInputOverlay cursorPoint={cursorPoint} />
+        )}
       </div>
+    </div>
+  )
+}
+
+// Ghost wall segments for multi-point dimension drafting in 2D
+function FloorplanDimensionGhostWalls({
+  toSvgX,
+  toSvgY,
+  stroke,
+  fill,
+}: {
+  toSvgX: (x: number) => number
+  toSvgY: (y: number) => number
+  stroke: string
+  fill: string
+}) {
+  const points = useDimensionDraftStore((s) => s.points)
+  const previewPoint = useDimensionDraftStore((s) => s.previewPoint)
+
+  const ghostWalls = useMemo(() => {
+    const allPoints = previewPoint ? [...points, previewPoint] : points
+    if (allPoints.length < 2) return []
+    const segments: Array<{ start: WallPlanPoint; end: WallPlanPoint }> = []
+    for (let i = 1; i < allPoints.length; i++) {
+      const start = allPoints[i - 1]
+      const end = allPoints[i]
+      if (start && end) {
+        segments.push({ start, end })
+      }
+    }
+    return segments
+  }, [points, previewPoint])
+
+  if (ghostWalls.length === 0) return null
+
+  return (
+    <g>
+      {ghostWalls.map((seg, i) => (
+        <line
+          key={i}
+          x1={toSvgX(seg.start[0])}
+          y1={toSvgY(seg.start[1])}
+          x2={toSvgX(seg.end[0])}
+          y2={toSvgY(seg.end[1])}
+          stroke={stroke}
+          strokeOpacity={0.4}
+          strokeWidth={2}
+          strokeDasharray="6 3"
+        />
+      ))}
+    </g>
+  )
+}
+
+// Floating dimension input overlay positioned near the cursor in 2D
+function FloorplanDimensionInputOverlay({
+  cursorPoint,
+}: {
+  cursorPoint: WallPlanPoint | null
+}) {
+  const store = useDimensionDraftStore()
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Position the overlay near the cursor using the SVG's screen transform
+  useEffect(() => {
+    if (!cursorPoint || !containerRef.current) return
+    const svg = containerRef.current.closest('svg')
+    if (!svg) return
+    const pt = svg.createSVGPoint()
+    pt.x = cursorPoint[0]
+    pt.y = cursorPoint[1]
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return
+    const screen = pt.matrixTransform(ctm)
+    setPos({ x: screen.x + 20, y: screen.y - 40 })
+  }, [cursorPoint])
+
+  if (!pos) return null
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        position: 'fixed',
+        left: pos.x,
+        top: pos.y,
+        zIndex: 1000,
+        pointerEvents: 'auto',
+      }}
+    >
+      <DimensionInput
+        state={{
+          active: true,
+          fieldType: store.fieldType,
+          lengthValue: store.lengthValue,
+          angleValue: store.angleValue,
+          lockedLength: store.lockedLength,
+          lockedAngle: store.lockedAngle,
+        }}
+        onChange={(newState) => store.setValues(newState.lengthValue, newState.angleValue)}
+        onConfirm={() => {
+          if (cursorPoint) {
+            store.placePoint(cursorPoint)
+          }
+        }}
+        onCancel={() => store.reset()}
+      />
     </div>
   )
 }

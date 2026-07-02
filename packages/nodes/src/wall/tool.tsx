@@ -35,10 +35,20 @@ import {
   useWallSplitMode,
   WALL_JOIN_SNAP_RADIUS,
   type WallPlanPoint,
+  // Dimension drafting
+  buildGhostWalls,
+  DimensionInput,
+  type DimensionDraftState,
+  EMPTY_DIMENSION_DRAFT,
+  isDoubleClick,
+  placeDraftPoint,
+  recordClickTime,
+  updateDraftPreview,
+  useDimensionDraftStore,
 } from '@pascal-app/editor'
 import { getSceneTheme, useViewer } from '@pascal-app/viewer'
 import { Html } from '@react-three/drei'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BoxGeometry, BufferGeometry, DoubleSide, type Group, type Mesh, Vector3 } from 'three'
 
 /**
@@ -530,6 +540,7 @@ export const WallTool: React.FC = () => {
   const buildingState = useRef(0)
   const [draftMeasurement, setDraftMeasurement] = useState<DraftMeasurementState>(null)
   const [axisGuide, setAxisGuide] = useState<DraftAxisGuideState>(null)
+  const dimStore = useDimensionDraftStore() ?? EMPTY_DIMENSION_DRAFT
   const measurementColor = isDark ? '#ffffff' : '#111111'
   const measurementShadowColor = isDark ? '#111111' : '#ffffff'
 
@@ -702,32 +713,60 @@ export const WallTool: React.FC = () => {
           angleLabel: null,
         })
         triggerSFX('sfx:structure-build-start')
-        // Visibility is owned by `updateWallPreview` — it flips
-        // `mesh.visible` based on segment length. Setting it here
-        // (before any geometry data has been written) draws the
-        // mesh's empty `<shapeGeometry/>` placeholder, which WebGPU
-        // flags as "Vertex buffer slot 0 ... was not set" on the
-        // first frame after click. Leaving it false until the next
-        // `onGridMove` writes a real BoxGeometry skips that frame.
+        // Activate dimension input for the first point
+        useDimensionDraftStore.setState({
+          ...EMPTY_DIMENSION_DRAFT,
+          points: [[snappedStart[0], snappedStart[1]]],
+          fieldType: 'length',
+        })
         setDraftMeasurement(null)
       } else if (buildingState.current === 1) {
-        const angleLocked = isAngleSnapActive()
-        const snappedEnd = alignPoint(
-          snapWallDraftPointDetailed({
-            point: localClick,
-            walls: snapWalls,
-            start: angleLocked ? [startingPoint.current.x, startingPoint.current.z] : undefined,
-            angleSnap: angleLocked,
-            magnetic: isMagneticSnapActive(),
-          }).point,
-          {
-            applySnap: !angleLocked,
-            bypass: bypassAlign,
-          },
-        )
+        // Dimension input flow: if locked length+angle are set, use the
+        // calculated point instead of the mouse position.
+        const currentDim = useDimensionDraftStore.getState()
+        const now = event.nativeEvent.timeStamp
+
+        // Double-click check: finish drafting if user double-clicks
+        if (isDoubleClick(currentDim, now)) {
+          useDimensionDraftStore.getState().reset()
+          stopDrafting()
+          return
+        }
+
+        // If we have locked dimensions, use the calculated endpoint
+        let snappedEnd: WallPlanPoint
+        if (currentDim.lockedLength !== null && currentDim.lockedAngle !== null) {
+          const lastPt = currentDim.points.length > 0
+            ? currentDim.points[currentDim.points.length - 1]!
+            : [startingPoint.current.x, startingPoint.current.z] as WallPlanPoint
+          const rad = (currentDim.lockedAngle * Math.PI) / 180
+          snappedEnd = [
+            lastPt[0] + Math.cos(rad) * currentDim.lockedLength,
+            lastPt[1] + Math.sin(rad) * currentDim.lockedLength,
+          ]
+        } else {
+          const angleLocked = isAngleSnapActive()
+          snappedEnd = alignPoint(
+            snapWallDraftPointDetailed({
+              point: localClick,
+              walls: snapWalls,
+              start: angleLocked ? [startingPoint.current.x, startingPoint.current.z] : undefined,
+              angleSnap: angleLocked,
+              magnetic: isMagneticSnapActive(),
+            }).point,
+            {
+              applySnap: !angleLocked,
+              bypass: bypassAlign,
+            },
+          )
+        }
+
         const dx = snappedEnd[0] - startingPoint.current.x
         const dz = snappedEnd[1] - startingPoint.current.z
         if (dx * dx + dz * dz < 0.01 * 0.01) return
+
+        // Record click timestamp for double-click detection
+        useDimensionDraftStore.getState().checkDoubleClick(now)
 
         const createdWall = createWallOnCurrentLevel(
           [startingPoint.current.x, startingPoint.current.z],
@@ -742,6 +781,7 @@ export const WallTool: React.FC = () => {
           useWallSnapIndicator.getState().clear()
 
           if (useEditor.getState().getContinuation('wall') === 'single') {
+            useDimensionDraftStore.getState().reset()
             stopDrafting()
             return
           }
@@ -754,6 +794,11 @@ export const WallTool: React.FC = () => {
           cursorRef.current?.position.copy(startingPoint.current)
           buildingState.current = 1
           setAxisGuide({ origin: nextStart, y: event.localPosition[1], angleLabel: null })
+          useDimensionDraftStore.setState({
+            ...EMPTY_DIMENSION_DRAFT,
+            points: [[nextStart[0], nextStart[1]]],
+            fieldType: 'length',
+          })
 
           updateWallPreview(
             wallPreviewRef.current,
@@ -772,6 +817,7 @@ export const WallTool: React.FC = () => {
         useWallSnapIndicator.getState().clear()
 
         if (useEditor.getState().getContinuation('wall') === 'single') {
+          useDimensionDraftStore.getState().reset()
           stopDrafting()
           return
         }
@@ -780,6 +826,7 @@ export const WallTool: React.FC = () => {
           chainFirstVertex.current &&
           isWithinWallJoinSnapRadius(createdWall.end, chainFirstVertex.current)
         ) {
+          useDimensionDraftStore.getState().reset()
           stopDrafting()
           return
         }
@@ -798,6 +845,11 @@ export const WallTool: React.FC = () => {
           y: event.localPosition[1],
           angleLabel: null,
         })
+        useDimensionDraftStore.setState({
+          ...EMPTY_DIMENSION_DRAFT,
+          points: [[nextStart[0], nextStart[1]]],
+          fieldType: 'length',
+        })
         // Hide the preview until the next `onGridMove` writes the
         // new segment's geometry. Without this the prior segment's
         // BoxGeometry stays visible for a frame on top of the
@@ -813,6 +865,7 @@ export const WallTool: React.FC = () => {
     const onCancel = () => {
       if (buildingState.current === 1) {
         markToolCancelConsumed()
+        useDimensionDraftStore.getState().reset()
         stopDrafting()
       }
     }
@@ -820,6 +873,11 @@ export const WallTool: React.FC = () => {
     emitter.on('grid:move', onGridMove)
     emitter.on('grid:click', onGridClick)
     emitter.on('tool:cancel', onCancel)
+
+    const onDimensionFocus = (fieldType: 'length' | 'angle') => {
+      useDimensionDraftStore.getState().setFieldType(fieldType)
+    }
+    emitter.on('dimension:focus', onDimensionFocus)
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === 'KeyO') {
@@ -832,12 +890,29 @@ export const WallTool: React.FC = () => {
       emitter.off('grid:move', onGridMove)
       emitter.off('grid:click', onGridClick)
       emitter.off('tool:cancel', onCancel)
+      emitter.off('dimension:focus', onDimensionFocus)
       window.removeEventListener('keydown', onKeyDown)
       useAlignmentGuides.getState().clear()
       useWallSnapIndicator.getState().clear()
       useSegmentDraftChain.getState().clear('wall')
     }
   }, [unit])
+
+  const handleDimChange = useCallback((newState: { lengthValue: string; angleValue: string }) => {
+    useDimensionDraftStore.getState().setValues(newState.lengthValue, newState.angleValue)
+  }, [])
+
+  const handleDimConfirm = useCallback(() => {
+    // The click handler handles the actual wall creation
+  }, [])
+
+  const handleDimCancel = useCallback(() => {
+    useDimensionDraftStore.getState().reset()
+    if (buildingState.current === 1) {
+      markToolCancelConsumed()
+      emitter.emit('tool:cancel')
+    }
+  }, [])
 
   return (
     <group>
@@ -858,6 +933,17 @@ export const WallTool: React.FC = () => {
           transparent
         />
       </mesh>
+      {/* Ghost walls for multi-point dimension drafting */}
+      {dimStore.points.length > 1 && buildGhostWalls(dimStore.points).map((seg, i) => (
+        <GhostWallSegment key={i} start={seg.start} end={seg.end} y={startingPoint.current.y} />
+      ))}
+      {dimStore.previewPoint && dimStore.points.length > 0 && (
+        <GhostWallSegment
+          start={dimStore.points[dimStore.points.length - 1]!}
+          end={dimStore.previewPoint}
+          y={startingPoint.current.y}
+        />
+      )}
       {draftMeasurement && (
         <>
           <DraftMeasurementLabel
@@ -878,6 +964,33 @@ export const WallTool: React.FC = () => {
             </group>
           ))}
         </>
+      )}
+      {/* Dimension input HUD */}
+      {dimStore.points.length > 0 && (
+        <Html
+          center
+          position={[
+            startingPoint.current.x,
+            startingPoint.current.y + previewHeight + 0.3,
+            startingPoint.current.z,
+          ]}
+          style={{ pointerEvents: 'auto' }}
+          zIndexRange={[100, 0]}
+        >
+          <DimensionInput
+            state={{
+              active: true,
+              fieldType: dimStore.fieldType,
+              lengthValue: dimStore.lengthValue,
+              angleValue: dimStore.angleValue,
+              lockedLength: dimStore.lockedLength,
+              lockedAngle: dimStore.lockedAngle,
+            }}
+            onChange={handleDimChange}
+            onConfirm={handleDimConfirm}
+            onCancel={handleDimCancel}
+          />
+        </Html>
       )}
     </group>
   )
@@ -1003,6 +1116,55 @@ function DraftMeasurementLabel({
         {label}
       </div>
     </Html>
+  )
+}
+
+function GhostWallSegment({
+  start,
+  end,
+  y,
+}: {
+  start: WallPlanPoint
+  end: WallPlanPoint
+  y: number
+}) {
+  const geometry = useMemo(() => {
+    const sx = start[0], sz = start[1]
+    const ex = end[0], ez = end[1]
+    const dx = ex - sx
+    const dz = ez - sz
+    const length = Math.sqrt(dx * dx + dz * dz)
+    if (length < 0.01) return null
+
+    const angle = Math.atan2(dz, dx)
+    const midX = (sx + ex) / 2
+    const midZ = (sz + ez) / 2
+
+    const geo = new BoxGeometry(length, WALL_HEIGHT, DRAFT_WALL_THICKNESS)
+    const matrix = new Vector3(midX, y + WALL_HEIGHT / 2, midZ)
+    return { geo, position: matrix, angle }
+  }, [start, end, y])
+
+  if (!geometry) return null
+
+  return (
+    <mesh
+      layers={EDITOR_LAYER}
+      renderOrder={1}
+      position={geometry.position}
+      rotation={[0, -geometry.angle, 0]}
+      visible
+    >
+      <primitive object={geometry.geo} attach="geometry" />
+      <meshBasicMaterial
+        color="#818cf8"
+        depthTest={false}
+        depthWrite={false}
+        opacity={0.25}
+        side={DoubleSide}
+        transparent
+      />
+    </mesh>
   )
 }
 

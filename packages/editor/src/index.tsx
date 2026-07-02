@@ -161,6 +161,15 @@ export {
   type WallDraftSnapResult,
   type WallPlanPoint,
   type WallSnapRadii,
+  // Multi-point dimension drafting
+  buildGhostWalls,
+  DOUBLE_CLICK_THRESHOLD_MS,
+  EMPTY_DIMENSION_DRAFT,
+  isDoubleClick,
+  placeDraftPoint,
+  recordClickTime,
+  updateDraftPreview,
+  type DimensionDraftState,
 } from './components/tools/wall/wall-drafting'
 // `ToolbarLeft` / `ToolbarRight` are the headless-spec aliases for the
 // existing `ViewerToolbarLeft` / `ViewerToolbarRight` exports — the
@@ -176,6 +185,8 @@ export {
   ViewToggles as ViewerToolbarLeft,
 } from './components/ui/action-menu/view-toggles'
 export { useCommandPalette } from './components/ui/command-palette'
+export { useDimensionDraftStore } from './lib/dimension-draft-store'
+export { DimensionInput } from './components/tools/shared/dimension-input'
 export { ActionButton, ActionGroup } from './components/ui/controls/action-button'
 export { MaterialPaintPanel } from './components/ui/controls/material-paint-panel'
 export { MaterialPicker } from './components/ui/controls/material-picker'

@@ -139,6 +139,24 @@ export const useKeyboard = ({
         }
       }
 
+      // D/A shortcuts to focus dimension input fields during wall drafting
+      if (
+        (e.key === 'd' || e.key === 'D' || e.key === 'a' || e.key === 'A') &&
+        !e.repeat &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        !e.altKey &&
+        useEditor.getState().tool === 'wall'
+      ) {
+        e.preventDefault()
+        emitter.emit(
+          'dimension:focus',
+          e.key === 'd' || e.key === 'D' ? 'length' : 'angle',
+        )
+        return
+      }
+
       if (e.key === 'Escape') {
         e.preventDefault()
         _toolCancelConsumed = false
