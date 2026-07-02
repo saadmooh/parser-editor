@@ -632,7 +632,24 @@ export const WallTool: React.FC = () => {
         )
 
       if (buildingState.current === 1) {
-        const snappedLocal = gridPosition
+        // If locked dimensions are set, use the calculated endpoint for the preview
+        const dimState = useDimensionDraftStore.getState()
+        let snappedLocal: WallPlanPoint
+        if (dimState.lockedLength !== null) {
+          const lastPt = dimState.points.length > 0
+            ? dimState.points[dimState.points.length - 1]!
+            : [startingPoint.current.x, startingPoint.current.z] as WallPlanPoint
+          const angle = dimState.lockedAngle !== null
+            ? dimState.lockedAngle
+            : (Math.atan2(localPoint[1] - lastPt[1], localPoint[0] - lastPt[0]) * 180) / Math.PI
+          const rad = (angle * Math.PI) / 180
+          snappedLocal = [
+            lastPt[0] + Math.cos(rad) * dimState.lockedLength,
+            lastPt[1] + Math.sin(rad) * dimState.lockedLength,
+          ]
+        } else {
+          snappedLocal = gridPosition
+        }
         endingPoint.current.set(snappedLocal[0], event.localPosition[1], snappedLocal[1])
         cursorRef.current.position.copy(endingPoint.current)
         setAxisGuide({
@@ -733,13 +750,17 @@ export const WallTool: React.FC = () => {
           return
         }
 
-        // If we have locked dimensions, use the calculated endpoint
+        // If we have locked dimensions, use the calculated endpoint.
+        // If only length is set, use the mouse angle as direction.
         let snappedEnd: WallPlanPoint
-        if (currentDim.lockedLength !== null && currentDim.lockedAngle !== null) {
+        if (currentDim.lockedLength !== null) {
           const lastPt = currentDim.points.length > 0
             ? currentDim.points[currentDim.points.length - 1]!
             : [startingPoint.current.x, startingPoint.current.z] as WallPlanPoint
-          const rad = (currentDim.lockedAngle * Math.PI) / 180
+          const angle = currentDim.lockedAngle !== null
+            ? currentDim.lockedAngle
+            : (Math.atan2(localClick[1] - lastPt[1], localClick[0] - lastPt[0]) * 180) / Math.PI
+          const rad = (angle * Math.PI) / 180
           snappedEnd = [
             lastPt[0] + Math.cos(rad) * currentDim.lockedLength,
             lastPt[1] + Math.sin(rad) * currentDim.lockedLength,
