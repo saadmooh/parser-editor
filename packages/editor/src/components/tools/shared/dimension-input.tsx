@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { parseAngle, parseDimension } from '@pascal-app/core'
 
 export interface DimensionInputState {
@@ -47,20 +47,12 @@ export function DimensionInput({
 }: DimensionInputProps) {
   const lengthRef = useRef<HTMLInputElement>(null)
   const angleRef = useRef<HTMLInputElement>(null)
-  const prevFieldType = useRef(state.fieldType)
 
-  // Use layoutEffect so focus happens BEFORE the browser paints,
-  // preventing the 3D canvas from stealing it.
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!state.active) return
-    if (prevFieldType.current !== state.fieldType) {
-      prevFieldType.current = state.fieldType
-      const target = state.fieldType === 'length' ? lengthRef.current : angleRef.current
-      if (target) {
-        target.focus()
-        target.select()
-      }
-    }
+    const target = state.fieldType === 'length' ? lengthRef.current : angleRef.current
+    target?.focus()
+    target?.select()
   }, [state.active, state.fieldType])
 
   const commitValues = useCallback(() => {
@@ -75,20 +67,14 @@ export function DimensionInput({
     }
   }, [state, onChange])
 
-  const handleTab = useCallback(
-    (e: React.KeyboardEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      const next = state.fieldType === 'length' ? 'angle' : 'length'
-      onChange({ ...state, fieldType: next })
-    },
-    [state, onChange],
-  )
-
-  const handleLengthKeyDown = useCallback(
+  const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Tab') {
-        handleTab(e)
+        e.preventDefault()
+        onChange({
+          ...state,
+          fieldType: state.fieldType === 'length' ? 'angle' : 'length',
+        })
       } else if (e.key === 'Enter') {
         e.preventDefault()
         commitValues()
@@ -98,23 +84,7 @@ export function DimensionInput({
         onCancel()
       }
     },
-    [handleTab, commitValues, onConfirm, onCancel],
-  )
-
-  const handleAngleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Tab') {
-        handleTab(e)
-      } else if (e.key === 'Enter') {
-        e.preventDefault()
-        commitValues()
-        onConfirm()
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-      }
-    },
-    [handleTab, commitValues, onConfirm, onCancel],
+    [state, onChange, commitValues, onConfirm, onCancel],
   )
 
   const handleLengthChange = useCallback(
@@ -161,8 +131,6 @@ export function DimensionInput({
     <div
       style={style}
       className="pointer-events-auto flex items-center gap-1 rounded-lg border border-zinc-600 bg-zinc-900/95 px-2 py-1.5 shadow-lg backdrop-blur-sm"
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
     >
       <label className="flex items-center gap-1">
         <span className="text-[11px] font-medium text-zinc-400">L</span>
@@ -171,7 +139,7 @@ export function DimensionInput({
           type="text"
           value={state.lengthValue}
           onChange={handleLengthChange}
-          onKeyDown={handleLengthKeyDown}
+          onKeyDown={handleKeyDown}
           onBlur={handleLengthBlur}
           onFocus={() => onChange({ ...state, fieldType: 'length' })}
           placeholder="0.00m"
@@ -188,7 +156,7 @@ export function DimensionInput({
           type="text"
           value={state.angleValue}
           onChange={handleAngleChange}
-          onKeyDown={handleAngleKeyDown}
+          onKeyDown={handleKeyDown}
           onBlur={handleAngleBlur}
           onFocus={() => onChange({ ...state, fieldType: 'angle' })}
           placeholder="0°"

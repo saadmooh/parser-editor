@@ -68,27 +68,6 @@ export const useKeyboard = ({
         ctrlTapClean = false
       }
 
-      // D/A shortcuts to focus dimension input fields during wall drafting.
-      // These MUST run before the input guard below so they fire even when
-      // the user is typing in the DimensionInput fields.
-      if (
-        (e.key === 'd' || e.key === 'D' || e.key === 'a' || e.key === 'A') &&
-        !e.repeat &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.shiftKey &&
-        !e.altKey &&
-        useEditor.getState().tool === 'wall'
-      ) {
-        e.preventDefault()
-        e.stopPropagation()
-        emitter.emit(
-          'dimension:focus',
-          e.key === 'd' || e.key === 'D' ? 'length' : 'angle',
-        )
-        return
-      }
-
       // Don't handle shortcuts if user is typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return
@@ -158,6 +137,24 @@ export const useKeyboard = ({
           sfxEmitter.emit('sfx:grid-snap')
           return
         }
+      }
+
+      // D/A shortcuts to focus dimension input fields during wall drafting
+      if (
+        (e.key === 'd' || e.key === 'D' || e.key === 'a' || e.key === 'A') &&
+        !e.repeat &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        !e.altKey &&
+        useEditor.getState().tool === 'wall'
+      ) {
+        e.preventDefault()
+        emitter.emit(
+          'dimension:focus',
+          e.key === 'd' || e.key === 'D' ? 'length' : 'angle',
+        )
+        return
       }
 
       if (e.key === 'Escape') {
