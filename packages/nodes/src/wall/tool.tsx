@@ -919,8 +919,12 @@ export const WallTool: React.FC = () => {
     }
   }, [unit])
 
-  const handleDimChange = useCallback((newState: { lengthValue: string; angleValue: string }) => {
-    useDimensionDraftStore.getState().setValues(newState.lengthValue, newState.angleValue)
+  const handleDimChange = useCallback((newState: { lengthValue: string; angleValue: string; fieldType?: 'length' | 'angle' }) => {
+    const store = useDimensionDraftStore.getState()
+    store.setValues(newState.lengthValue, newState.angleValue)
+    if (newState.fieldType) {
+      store.setFieldType(newState.fieldType)
+    }
   }, [])
 
   const handleDimConfirm = useCallback(() => {

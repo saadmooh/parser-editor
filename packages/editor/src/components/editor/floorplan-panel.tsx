@@ -11279,7 +11279,10 @@ function FloorplanDimensionInputOverlay({
           lockedLength: store.lockedLength,
           lockedAngle: store.lockedAngle,
         }}
-        onChange={(newState) => store.setValues(newState.lengthValue, newState.angleValue)}
+        onChange={(newState) => {
+          store.setValues(newState.lengthValue, newState.angleValue)
+          if (newState.fieldType) store.setFieldType(newState.fieldType)
+        }}
         onConfirm={() => {
           if (cursorPoint) {
             store.placePoint(cursorPoint)

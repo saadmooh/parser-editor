@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { parseAngle, parseDimension } from '@pascal-app/core'
 
 export interface DimensionInputState {
@@ -47,12 +47,22 @@ export function DimensionInput({
 }: DimensionInputProps) {
   const lengthRef = useRef<HTMLInputElement>(null)
   const angleRef = useRef<HTMLInputElement>(null)
+  // Track fieldType locally so Tab can toggle it without depending on
+  // the parent's onChange → setValues chain (which doesn't update fieldType).
+  const fieldTypeRef = useRef(state.fieldType)
 
+  useEffect(() => {
+    fieldTypeRef.current = state.fieldType
+  }, [state.fieldType])
+
+  // Focus the correct input when fieldType changes
   useEffect(() => {
     if (!state.active) return
     const target = state.fieldType === 'length' ? lengthRef.current : angleRef.current
-    target?.focus()
-    target?.select()
+    if (target) {
+      target.focus()
+      target.select()
+    }
   }, [state.active, state.fieldType])
 
   const commitValues = useCallback(() => {
@@ -67,14 +77,23 @@ export function DimensionInput({
     }
   }, [state, onChange])
 
-  const handleKeyDown = useCallback(
+  const focusField = useCallback((field: 'length' | 'angle') => {
+    const target = field === 'length' ? lengthRef.current : angleRef.current
+    if (target) {
+      target.focus()
+      target.select()
+    }
+  }, [])
+
+  const handleLengthKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Tab') {
         e.preventDefault()
-        onChange({
-          ...state,
-          fieldType: state.fieldType === 'length' ? 'angle' : 'length',
-        })
+        e.stopPropagation()
+        fieldTypeRef.current = 'angle'
+        onChange({ ...state, fieldType: 'angle' })
+        // Focus angle input synchronously, don't wait for useEffect
+        requestAnimationFrame(() => focusField('angle'))
       } else if (e.key === 'Enter') {
         e.preventDefault()
         commitValues()
@@ -84,7 +103,27 @@ export function DimensionInput({
         onCancel()
       }
     },
-    [state, onChange, commitValues, onConfirm, onCancel],
+    [state, onChange, commitValues, onConfirm, onCancel, focusField],
+  )
+
+  const handleAngleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        e.stopPropagation()
+        fieldTypeRef.current = 'length'
+        onChange({ ...state, fieldType: 'length' })
+        requestAnimationFrame(() => focusField('length'))
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        commitValues()
+        onConfirm()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        onCancel()
+      }
+    },
+    [state, onChange, commitValues, onConfirm, onCancel, focusField],
   )
 
   const handleLengthChange = useCallback(
@@ -139,7 +178,7 @@ export function DimensionInput({
           type="text"
           value={state.lengthValue}
           onChange={handleLengthChange}
-          onKeyDown={handleKeyDown}
+          onKeyDown={handleLengthKeyDown}
           onBlur={handleLengthBlur}
           onFocus={() => onChange({ ...state, fieldType: 'length' })}
           placeholder="0.00m"
@@ -156,7 +195,7 @@ export function DimensionInput({
           type="text"
           value={state.angleValue}
           onChange={handleAngleChange}
-          onKeyDown={handleKeyDown}
+          onKeyDown={handleAngleKeyDown}
           onBlur={handleAngleBlur}
           onFocus={() => onChange({ ...state, fieldType: 'angle' })}
           placeholder="0°"
