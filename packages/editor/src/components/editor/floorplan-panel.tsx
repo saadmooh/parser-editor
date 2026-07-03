@@ -9112,11 +9112,23 @@ export function FloorplanPanel({
         .getState()
         .set(wallSnap.snap ? { x: snappedPoint[0], z: snappedPoint[1], kind: wallSnap.snap } : null)
 
-      // Emit `grid:move` so the registry-driven wall tool's 3D preview
-      // tracks the cursor. The local draftEnd update below is what
-      // drives the 2D draft polygon — both views update in parallel.
-      emitFloorplanGridEvent('move', snappedPoint, event)
-      setCursorPoint(snappedPoint)
+      // If locked dimensions are set, override with calculated endpoint
+      const dimState = useDimensionDraftStore.getState()
+      let finalMovePoint = snappedPoint
+      if (dimState.lockedLength !== null && dimState.points.length > 0) {
+        const lastPt = dimState.points[dimState.points.length - 1]!
+        const angle = dimState.lockedAngle !== null
+          ? dimState.lockedAngle
+          : (Math.atan2(planPoint[1] - lastPt[1], planPoint[0] - lastPt[0]) * 180) / Math.PI
+        const rad = (angle * Math.PI) / 180
+        finalMovePoint = [
+          lastPt[0] + Math.cos(rad) * dimState.lockedLength,
+          lastPt[1] + Math.sin(rad) * dimState.lockedLength,
+        ]
+      }
+
+      emitFloorplanGridEvent('move', finalMovePoint, event)
+      setCursorPoint(finalMovePoint)
 
       if (!draftStart) {
         return
@@ -9125,13 +9137,13 @@ export function FloorplanPanel({
       setDraftEnd((previousEnd) => {
         if (
           !previousEnd ||
-          previousEnd[0] !== snappedPoint[0] ||
-          previousEnd[1] !== snappedPoint[1]
+          previousEnd[0] !== finalMovePoint[0] ||
+          previousEnd[1] !== finalMovePoint[1]
         ) {
           sfxEmitter.emit('sfx:grid-snap')
         }
 
-        return snappedPoint
+        return finalMovePoint
       })
     },
     [

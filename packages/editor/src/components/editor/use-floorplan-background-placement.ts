@@ -11,6 +11,7 @@ import usePlacementPreview from '../../store/use-placement-preview'
 import useSegmentDraftChain from '../../store/use-segment-draft-chain'
 import { snapFenceDraftPoint } from '../tools/fence/fence-drafting'
 import { getSegmentGridStep, type WallPlanPoint } from '../tools/wall/wall-drafting'
+import { useDimensionDraftStore } from '../../lib/dimension-draft-store'
 
 type UseFloorplanBackgroundPlacementArgs = {
   activePolygonDraftPoints: WallPlanPoint[]
@@ -339,15 +340,54 @@ export function useFloorplanBackgroundPlacement({
           })
         }
 
-        emitFloorplanGridEvent('click', snappedPoint, event)
+        // Check if locked dimensions are set — use calculated point instead of mouse
+        const dimState = useDimensionDraftStore.getState()
+        let finalPoint = snappedPoint
+        if (dimState.lockedLength !== null && dimState.points.length > 0) {
+          const lastPt = dimState.points[dimState.points.length - 1]!
+          const angle = dimState.lockedAngle !== null
+            ? dimState.lockedAngle
+            : (Math.atan2(planPoint[1] - lastPt[1], planPoint[0] - lastPt[0]) * 180) / Math.PI
+          const rad = (angle * Math.PI) / 180
+          finalPoint = [
+            lastPt[0] + Math.cos(rad) * dimState.lockedLength,
+            lastPt[1] + Math.sin(rad) * dimState.lockedLength,
+          ]
+        }
 
-        // Double-click finishes the chain. The emit above already made the
-        // 3D wall tool stopDrafting (its detail >= 2 guard), so close the
-        // 2D draft too — otherwise it stays open against a closed 3D tool
-        // and the next previewed segment is silently never created.
+        emitFloorplanGridEvent('click', finalPoint, event)
+
+        // Double-click finishes the chain.
         if (draftStart && event.detail >= 2) {
+          // Create all collected walls from dimension draft points
+          const allPoints = dimState.points
+          if (allPoints.length >= 2) {
+            for (let i = 0; i < allPoints.length - 1; i++) {
+              const a = allPoints[i]!
+              const b = allPoints[i + 1]!
+              emitFloorplanGridEvent('click', b, event)
+            }
+          }
+          useDimensionDraftStore.getState().reset()
           clearWallPlacementDraft()
-          setCursorPoint(snappedPoint)
+          setCursorPoint(finalPoint)
+          return true
+        }
+
+        // If locked dimensions, add point to store and move start
+        if (dimState.lockedLength !== null && dimState.points.length > 0) {
+          useDimensionDraftStore.getState().checkDoubleClick(event.nativeEvent.timeStamp)
+          useDimensionDraftStore.setState({
+            points: [...dimState.points, finalPoint],
+            previewPoint: null,
+            lengthValue: '',
+            angleValue: '',
+            lockedLength: null,
+            lockedAngle: null,
+            fieldType: 'length',
+          })
+          // Update the draft start for the next segment
+          handleWallPlacementPoint(finalPoint)
           return true
         }
 
