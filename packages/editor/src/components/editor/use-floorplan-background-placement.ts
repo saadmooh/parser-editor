@@ -355,43 +355,22 @@ export function useFloorplanBackgroundPlacement({
           ]
         }
 
+        // Emit grid:click so the 3D tool creates the wall
         emitFloorplanGridEvent('click', finalPoint, event)
 
-        // Double-click finishes the chain.
-        if (draftStart && event.detail >= 2) {
-          // Create all collected walls from dimension draft points
-          const allPoints = dimState.points
-          if (allPoints.length >= 2) {
-            for (let i = 0; i < allPoints.length - 1; i++) {
-              const a = allPoints[i]!
-              const b = allPoints[i + 1]!
-              emitFloorplanGridEvent('click', b, event)
-            }
-          }
-          useDimensionDraftStore.getState().reset()
-          clearWallPlacementDraft()
-          setCursorPoint(finalPoint)
-          return true
-        }
+        // Add point to dimension store and reset for next segment
+        useDimensionDraftStore.setState({
+          points: [...dimState.points, finalPoint],
+          previewPoint: null,
+          lengthValue: '',
+          angleValue: '',
+          lockedLength: null,
+          lockedAngle: null,
+          fieldType: 'length',
+        })
 
-        // If locked dimensions, add point to store and move start
-        if (dimState.lockedLength !== null && dimState.points.length > 0) {
-          useDimensionDraftStore.getState().checkDoubleClick(event.nativeEvent.timeStamp)
-          useDimensionDraftStore.setState({
-            points: [...dimState.points, finalPoint],
-            previewPoint: null,
-            lengthValue: '',
-            angleValue: '',
-            lockedLength: null,
-            lockedAngle: null,
-            fieldType: 'length',
-          })
-          // Update the draft start for the next segment
-          handleWallPlacementPoint(finalPoint)
-          return true
-        }
-
-        handleWallPlacementPoint(snappedPoint)
+        // Update the 2D draft start for the next segment
+        handleWallPlacementPoint(finalPoint)
         return true
       }
 
