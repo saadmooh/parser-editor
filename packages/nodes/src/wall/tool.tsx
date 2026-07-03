@@ -803,7 +803,7 @@ export const WallTool: React.FC = () => {
           return
         }
 
-        // No locked dimensions — use mouse position (original behavior)
+        // No locked dimensions — use mouse position, just collect the point
         const angleLocked = isAngleSnapActive()
         const snappedEnd = alignPoint(
           snapWallDraftPointDetailed({
@@ -823,85 +823,33 @@ export const WallTool: React.FC = () => {
         const dz = snappedEnd[1] - startingPoint.current.z
         if (dx * dx + dz * dz < 0.01 * 0.01) return
 
-        const createdWall = createWallOnCurrentLevel(
-          [startingPoint.current.x, startingPoint.current.z],
-          snappedEnd,
-          { splitKeyHeld: useWallSplitMode.getState().enabled },
-        )
+        // Record click timestamp for double-click detection
+        useDimensionDraftStore.getState().checkDoubleClick(event.nativeEvent.timeStamp)
 
-        if (!createdWall) {
-          refreshAlignmentCandidates()
-          useAlignmentGuides.getState().clear()
-          useWallSnapIndicator.getState().clear()
+        // Collect the point (no wall created yet)
+        const curDim = useDimensionDraftStore.getState()
+        useDimensionDraftStore.setState({
+          points: [...curDim.points, snappedEnd],
+          previewPoint: null,
+          lengthValue: '',
+          angleValue: '',
+          lockedLength: null,
+          lockedAngle: null,
+          fieldType: 'length',
+        })
 
-          if (useEditor.getState().getContinuation('wall') === 'single') {
-            useDimensionDraftStore.getState().reset()
-            stopDrafting()
-            return
-          }
-
-          const nextStart = snappedEnd
-          useSegmentDraftChain.getState().setChainStart('wall', [nextStart[0], nextStart[1]])
-          startingPoint.current.set(nextStart[0], event.localPosition[1], nextStart[1])
-          endingPoint.current.copy(startingPoint.current)
-          cursorRef.current?.position.copy(startingPoint.current)
-          buildingState.current = 1
-          setAxisGuide({ origin: nextStart, y: event.localPosition[1], angleLabel: null })
-          useDimensionDraftStore.setState({
-            ...EMPTY_DIMENSION_DRAFT,
-            points: [[nextStart[0], nextStart[1]]],
-            fieldType: 'length',
-          })
-
-          updateWallPreview(
-            wallPreviewRef.current,
-            startingPoint.current,
-            endingPoint.current,
-            previewHeightRef.current,
-            previewThicknessRef.current,
-          )
-          return
-        }
-
-        refreshAlignmentCandidates()
-        useAlignmentGuides.getState().clear()
-        useWallSnapIndicator.getState().clear()
-
-        if (useEditor.getState().getContinuation('wall') === 'single') {
-          useDimensionDraftStore.getState().reset()
-          stopDrafting()
-          return
-        }
-
-        if (
-          chainFirstVertex.current &&
-          isWithinWallJoinSnapRadius(createdWall.end, chainFirstVertex.current)
-        ) {
-          useDimensionDraftStore.getState().reset()
-          stopDrafting()
-          return
-        }
-
-        const nextStart = createdWall.end
-        useSegmentDraftChain.getState().setChainStart('wall', [nextStart[0], nextStart[1]])
-        startingPoint.current.set(nextStart[0], event.localPosition[1], nextStart[1])
+        // Move start to the new point for the next segment
+        useSegmentDraftChain.getState().setChainStart('wall', [snappedEnd[0], snappedEnd[1]])
+        startingPoint.current.set(snappedEnd[0], event.localPosition[1], snappedEnd[1])
         endingPoint.current.copy(startingPoint.current)
         cursorRef.current?.position.copy(startingPoint.current)
-        buildingState.current = 1
         setAxisGuide({
-          origin: nextStart,
+          origin: snappedEnd,
           y: event.localPosition[1],
           angleLabel: null,
         })
-        useDimensionDraftStore.setState({
-          ...EMPTY_DIMENSION_DRAFT,
-          points: [[nextStart[0], nextStart[1]]],
-          fieldType: 'length',
-        })
-        if (wallPreviewRef.current) {
-          wallPreviewRef.current.visible = false
-        }
         setDraftMeasurement(null)
+        return
       }
     }
 
