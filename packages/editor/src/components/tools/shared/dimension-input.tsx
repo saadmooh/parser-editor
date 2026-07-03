@@ -161,6 +161,8 @@ export function DimensionInput({
     <div
       style={style}
       className="pointer-events-auto flex items-center gap-1 rounded-lg border border-zinc-600 bg-zinc-900/95 px-2 py-1.5 shadow-lg backdrop-blur-sm"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
     >
       <label className="flex items-center gap-1">
         <span className="text-[11px] font-medium text-zinc-400">L</span>
