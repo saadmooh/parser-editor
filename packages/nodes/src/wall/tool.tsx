@@ -738,21 +738,26 @@ export const WallTool: React.FC = () => {
         })
         setDraftMeasurement(null)
       } else if (buildingState.current === 1) {
-        // Dimension input flow: if locked length+angle are set, use the
-        // calculated point instead of the mouse position.
         const currentDim = useDimensionDraftStore.getState()
         const now = event.nativeEvent.timeStamp
 
-        // Double-click check: finish drafting if user double-clicks
+        // Double-click check: finish drafting and create all walls
         if (isDoubleClick(currentDim, now)) {
+          // Create walls from all collected points
+          const allPoints = currentDim.points
+          if (allPoints.length >= 2) {
+            for (let i = 0; i < allPoints.length - 1; i++) {
+              createWallOnCurrentLevel(allPoints[i], allPoints[i + 1], {
+                splitKeyHeld: useWallSplitMode.getState().enabled,
+              })
+            }
+          }
           useDimensionDraftStore.getState().reset()
           stopDrafting()
           return
         }
 
-        // If we have locked dimensions, use the calculated endpoint.
-        // If only length is set, use the mouse angle as direction.
-        let snappedEnd: WallPlanPoint
+        // If locked dimensions are set, place the next point and continue
         if (currentDim.lockedLength !== null) {
           const lastPt = currentDim.points.length > 0
             ? currentDim.points[currentDim.points.length - 1]!
@@ -761,33 +766,63 @@ export const WallTool: React.FC = () => {
             ? currentDim.lockedAngle
             : (Math.atan2(localClick[1] - lastPt[1], localClick[0] - lastPt[0]) * 180) / Math.PI
           const rad = (angle * Math.PI) / 180
-          snappedEnd = [
+          const newPoint: WallPlanPoint = [
             lastPt[0] + Math.cos(rad) * currentDim.lockedLength,
             lastPt[1] + Math.sin(rad) * currentDim.lockedLength,
           ]
-        } else {
-          const angleLocked = isAngleSnapActive()
-          snappedEnd = alignPoint(
-            snapWallDraftPointDetailed({
-              point: localClick,
-              walls: snapWalls,
-              start: angleLocked ? [startingPoint.current.x, startingPoint.current.z] : undefined,
-              angleSnap: angleLocked,
-              magnetic: isMagneticSnapActive(),
-            }).point,
-            {
-              applySnap: !angleLocked,
-              bypass: bypassAlign,
-            },
-          )
+
+          // Record click timestamp for double-click detection
+          useDimensionDraftStore.getState().checkDoubleClick(now)
+
+          // Add the new point to the collected points
+          useDimensionDraftStore.setState({
+            points: [...currentDim.points, newPoint],
+            previewPoint: null,
+            lengthValue: '',
+            angleValue: '',
+            lockedLength: null,
+            lockedAngle: null,
+            fieldType: 'length',
+          })
+
+          // Move the start point to the new position for the next segment
+          useSegmentDraftChain.getState().setChainStart('wall', [newPoint[0], newPoint[1]])
+          startingPoint.current.set(newPoint[0], event.localPosition[1], newPoint[1])
+          endingPoint.current.copy(startingPoint.current)
+          cursorRef.current?.position.copy(startingPoint.current)
+          setAxisGuide({
+            origin: newPoint,
+            y: event.localPosition[1],
+            angleLabel: null,
+          })
+          setDraftMeasurement(null)
+
+          // Hide preview briefly until next mouse move redraws it
+          if (wallPreviewRef.current) {
+            wallPreviewRef.current.visible = false
+          }
+          return
         }
+
+        // No locked dimensions — use mouse position (original behavior)
+        const angleLocked = isAngleSnapActive()
+        const snappedEnd = alignPoint(
+          snapWallDraftPointDetailed({
+            point: localClick,
+            walls: snapWalls,
+            start: angleLocked ? [startingPoint.current.x, startingPoint.current.z] : undefined,
+            angleSnap: angleLocked,
+            magnetic: isMagneticSnapActive(),
+          }).point,
+          {
+            applySnap: !angleLocked,
+            bypass: bypassAlign,
+          },
+        )
 
         const dx = snappedEnd[0] - startingPoint.current.x
         const dz = snappedEnd[1] - startingPoint.current.z
         if (dx * dx + dz * dz < 0.01 * 0.01) return
-
-        // Record click timestamp for double-click detection
-        useDimensionDraftStore.getState().checkDoubleClick(now)
 
         const createdWall = createWallOnCurrentLevel(
           [startingPoint.current.x, startingPoint.current.z],
@@ -795,7 +830,6 @@ export const WallTool: React.FC = () => {
           { splitKeyHeld: useWallSplitMode.getState().enabled },
         )
 
-        // Keep the preview visible even when splitting (no new wall created)
         if (!createdWall) {
           refreshAlignmentCandidates()
           useAlignmentGuides.getState().clear()
@@ -807,7 +841,6 @@ export const WallTool: React.FC = () => {
             return
           }
 
-          // Reset for next segment from the end point
           const nextStart = snappedEnd
           useSegmentDraftChain.getState().setChainStart('wall', [nextStart[0], nextStart[1]])
           startingPoint.current.set(nextStart[0], event.localPosition[1], nextStart[1])
@@ -831,8 +864,6 @@ export const WallTool: React.FC = () => {
           return
         }
 
-        // The new segment is now a real node — make it an alignment target
-        // for the next segment, and drop the just-shown guide.
         refreshAlignmentCandidates()
         useAlignmentGuides.getState().clear()
         useWallSnapIndicator.getState().clear()
@@ -853,9 +884,6 @@ export const WallTool: React.FC = () => {
         }
 
         const nextStart = createdWall.end
-        // Publish the resolved chain start so the 2D floor-plan draft
-        // chains its next segment from the same point (its own snap
-        // pipeline can resolve a slightly different endpoint).
         useSegmentDraftChain.getState().setChainStart('wall', [nextStart[0], nextStart[1]])
         startingPoint.current.set(nextStart[0], event.localPosition[1], nextStart[1])
         endingPoint.current.copy(startingPoint.current)
@@ -871,11 +899,6 @@ export const WallTool: React.FC = () => {
           points: [[nextStart[0], nextStart[1]]],
           fieldType: 'length',
         })
-        // Hide the preview until the next `onGridMove` writes the
-        // new segment's geometry. Without this the prior segment's
-        // BoxGeometry stays visible for a frame on top of the
-        // freshly-committed real wall, producing a brief
-        // double-paint at the new wall's position.
         if (wallPreviewRef.current) {
           wallPreviewRef.current.visible = false
         }
