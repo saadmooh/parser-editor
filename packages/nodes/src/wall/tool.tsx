@@ -48,7 +48,7 @@ import {
 } from '@pascal-app/editor'
 import { getSceneTheme, useViewer } from '@pascal-app/viewer'
 import { Html } from '@react-three/drei'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { BoxGeometry, BufferGeometry, DoubleSide, type Group, type Mesh, Vector3 } from 'three'
 
 /**
@@ -747,7 +747,9 @@ export const WallTool: React.FC = () => {
           const allPoints = currentDim.points
           if (allPoints.length >= 2) {
             for (let i = 0; i < allPoints.length - 1; i++) {
-              createWallOnCurrentLevel(allPoints[i], allPoints[i + 1], {
+              const a = allPoints[i]!
+              const b = allPoints[i + 1]!
+              createWallOnCurrentLevel(a, b, {
                 splitKeyHeld: useWallSplitMode.getState().enabled,
               })
             }
@@ -797,10 +799,7 @@ export const WallTool: React.FC = () => {
           })
           setDraftMeasurement(null)
 
-          // Hide preview briefly until next mouse move redraws it
-          if (wallPreviewRef.current) {
-            wallPreviewRef.current.visible = false
-          }
+          // Don't hide preview — onGridMove will update it on next mouse move
           return
         }
 
@@ -941,6 +940,33 @@ export const WallTool: React.FC = () => {
       useSegmentDraftChain.getState().clear('wall')
     }
   }, [unit])
+
+  // Update the wall preview when locked dimensions change (user types a value).
+  // This fires before paint so the mesh updates instantly without waiting for
+  // the next mouse move.
+  const lockedLength = dimStore.lockedLength
+  const lockedAngle = dimStore.lockedAngle
+  useLayoutEffect(() => {
+    if (lockedLength === null || !wallPreviewRef.current || buildingState.current !== 1) return
+    const lastPt = dimStore.points.length > 0
+      ? dimStore.points[dimStore.points.length - 1]!
+      : [startingPoint.current.x, startingPoint.current.z] as WallPlanPoint
+    const angle = lockedAngle !== null
+      ? lockedAngle
+      : 0 // default to 0° if no angle set yet
+    const rad = (angle * Math.PI) / 180
+    const endX = lastPt[0] + Math.cos(rad) * lockedLength
+    const endZ = lastPt[1] + Math.sin(rad) * lockedLength
+    endingPoint.current.set(endX, startingPoint.current.y, endZ)
+    cursorRef.current?.position.copy(endingPoint.current)
+    updateWallPreview(
+      wallPreviewRef.current,
+      startingPoint.current,
+      endingPoint.current,
+      previewHeightRef.current,
+      previewThicknessRef.current,
+    )
+  }, [lockedLength, lockedAngle])
 
   const handleDimChange = useCallback((newState: { lengthValue: string; angleValue: string; fieldType?: 'length' | 'angle' }) => {
     const store = useDimensionDraftStore.getState()
