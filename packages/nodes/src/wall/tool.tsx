@@ -742,8 +742,9 @@ export const WallTool: React.FC = () => {
         const now = event.nativeEvent.timeStamp
 
         // Double-click check: finish drafting and create all walls
+        // This MUST run before the locked-length check because after
+        // placing a point, lockedLength is reset to null.
         if (isDoubleClick(currentDim, now)) {
-          // Create walls from all collected points
           const allPoints = currentDim.points
           if (allPoints.length >= 2) {
             for (let i = 0; i < allPoints.length - 1; i++) {
@@ -759,6 +760,9 @@ export const WallTool: React.FC = () => {
           return
         }
 
+        // Record click timestamp for next double-click detection
+        useDimensionDraftStore.getState().checkDoubleClick(now)
+
         // If locked dimensions are set, place the next point and continue
         if (currentDim.lockedLength !== null) {
           const lastPt = currentDim.points.length > 0
@@ -772,9 +776,6 @@ export const WallTool: React.FC = () => {
             lastPt[0] + Math.cos(rad) * currentDim.lockedLength,
             lastPt[1] + Math.sin(rad) * currentDim.lockedLength,
           ]
-
-          // Record click timestamp for double-click detection
-          useDimensionDraftStore.getState().checkDoubleClick(now)
 
           // Add the new point to the collected points
           useDimensionDraftStore.setState({
@@ -822,9 +823,6 @@ export const WallTool: React.FC = () => {
         const dx = snappedEnd[0] - startingPoint.current.x
         const dz = snappedEnd[1] - startingPoint.current.z
         if (dx * dx + dz * dz < 0.01 * 0.01) return
-
-        // Record click timestamp for double-click detection
-        useDimensionDraftStore.getState().checkDoubleClick(event.nativeEvent.timeStamp)
 
         // Collect the point (no wall created yet)
         const curDim = useDimensionDraftStore.getState()
