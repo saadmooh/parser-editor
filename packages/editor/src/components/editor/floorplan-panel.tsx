@@ -7929,6 +7929,7 @@ export function FloorplanPanel({
     wallRunReferenceRef.current = null
     setDraftEnd(null)
     useSegmentDraftChain.getState().clear('wall')
+    useDimensionDraftStore.getState().reset()
     // A run pulled from a wall end ends with the plan's draft: back to Select.
     endWallPullRun()
   }, [setDraftEnd])
@@ -9929,6 +9930,7 @@ export function FloorplanPanel({
         setWallChainFirstVertex(point)
         setDraftEnd(point)
         setCursorPoint(point)
+        useDimensionDraftStore.getState().startDraft(point)
         return
       }
 
@@ -10029,6 +10031,22 @@ export function FloorplanPanel({
       setDraftStart(nextStart)
       setDraftEnd(nextStart)
       setCursorPoint(nextStart)
+      const currentDim = useDimensionDraftStore.getState()
+      const alreadyHas =
+        currentDim.points.length > 0 &&
+        currentDim.points[currentDim.points.length - 1]![0] === nextStart[0] &&
+        currentDim.points[currentDim.points.length - 1]![1] === nextStart[1]
+      if (!alreadyHas) {
+        useDimensionDraftStore.setState({
+          points: [...currentDim.points, nextStart],
+          previewPoint: null,
+          lengthValue: '',
+          angleValue: '',
+          lockedLength: null,
+          lockedAngle: null,
+          fieldType: 'length',
+        })
+      }
     },
     [
       clearWallPlacementDraft,
@@ -11892,6 +11910,15 @@ export function FloorplanPanel({
                 walls={walls}
               />
 
+              {isWallBuildActive && (
+                <FloorplanDimensionGhostWalls
+                  fill={palette.draftFill}
+                  stroke={palette.draftStroke}
+                  toSvgX={toSvgX}
+                  toSvgY={toSvgY}
+                />
+              )}
+
               {selectedGuide && showGuides && (
                 <FloorplanGuideSelectionOverlay
                   guide={selectedGuide}
@@ -11953,6 +11980,17 @@ export function FloorplanPanel({
             )}
           </svg>
         ) : null}
+
+        {/* Floating dimension input overlay for 2D wall drafting */}
+        {isWallBuildActive && draftStart && (
+          <FloorplanDimensionInputOverlay
+            draftStart={draftStart}
+            onCommitPoint={(pt) => {
+              handleWallPlacementPoint(pt)
+            }}
+            onCancel={clearWallPlacementDraft}
+          />
+        )}
       </div>
     </div>
   )
@@ -12010,21 +12048,42 @@ function FloorplanDimensionGhostWalls({
 
 // Floating dimension input overlay positioned near the cursor in 2D
 function FloorplanDimensionInputOverlay({
-  cursorPoint,
+  draftStart,
   onCommitPoint,
+  onCancel,
 }: {
-  cursorPoint: WallPlanPoint | null
+  draftStart: WallPlanPoint | null
   onCommitPoint: (point: WallPlanPoint) => void
+  onCancel: () => void
 }) {
   const store = useDimensionDraftStore()
   const cursorPosition = useFloorplanDraftPreview((s) => s.cursorPosition)
+  const cursorPoint = useFloorplanDraftPreview((s) => s.cursorPoint)
+  const [lastPosition, setLastPosition] = useState<{ x: number; y: number } | null>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (cursorPosition) {
+      setLastPosition(cursorPosition)
+    }
+  }, [cursorPosition])
+
+  useEffect(() => {
+    const onFocus = (fieldType: 'length' | 'angle') => {
+      useDimensionDraftStore.getState().setFieldType(fieldType)
+    }
+    emitter.on('dimension:focus', onFocus)
+    return () => {
+      emitter.off('dimension:focus', onFocus)
+    }
+  }, [])
 
   const handleConfirm = useCallback(() => {
     const currentDim = useDimensionDraftStore.getState()
     const lastPt =
       currentDim.points.length > 0
         ? currentDim.points[currentDim.points.length - 1]!
-        : cursorPoint
+        : (draftStart ?? cursorPoint)
     if (!lastPt) return
 
     const length =
@@ -12057,16 +12116,41 @@ function FloorplanDimensionInputOverlay({
     })
 
     onCommitPoint(nextPoint)
-  }, [cursorPoint, onCommitPoint])
+  }, [cursorPoint, draftStart, onCommitPoint])
 
-  if (!cursorPosition) return null
+  // Resolve screen position: prefer live cursorPosition, fall back to lastPosition,
+  // or project target point via SVG CTM.
+  const resolvePosition = (): { x: number; y: number } | null => {
+    if (cursorPosition) return cursorPosition
+    if (lastPosition) return lastPosition
+    const targetPoint = cursorPoint ?? draftStart
+    if (!targetPoint || !overlayRef.current) return null
+    const viewportHost = overlayRef.current.parentElement
+    const scene = viewportHost?.querySelector<SVGGElement>('[data-floorplan-scene]')
+    const svg = scene?.ownerSVGElement
+    const ctm = scene?.getScreenCTM()
+    if (!svg || !ctm || !viewportHost) return null
+    const pt = svg.createSVGPoint()
+    pt.x = targetPoint[0]
+    pt.y = targetPoint[1]
+    const screenPt = pt.matrixTransform(ctm)
+    const hostRect = viewportHost.getBoundingClientRect()
+    return {
+      x: screenPt.x - hostRect.left,
+      y: screenPt.y - hostRect.top,
+    }
+  }
+
+  const pos = resolvePosition()
+  if (!pos) return null
 
   return (
     <div
+      ref={overlayRef}
       style={{
         position: 'absolute',
-        left: cursorPosition.x + 20,
-        top: cursorPosition.y - 40,
+        left: Math.max(12, pos.x + 20),
+        top: Math.max(12, pos.y - 44),
         zIndex: 1000,
         pointerEvents: 'auto',
       }}
@@ -12085,7 +12169,10 @@ function FloorplanDimensionInputOverlay({
           if (newState.fieldType) store.setFieldType(newState.fieldType)
         }}
         onConfirm={handleConfirm}
-        onCancel={() => store.reset()}
+        onCancel={() => {
+          store.reset()
+          onCancel()
+        }}
       />
     </div>
   )
