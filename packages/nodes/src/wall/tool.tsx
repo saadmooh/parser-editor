@@ -549,6 +549,7 @@ const LineWallTool: React.FC = () => {
   const constructionPlane = useRef<HorizontalConstructionPlane | null>(null)
   const flatConstructionBase = useRef(false)
   const buildingState = useRef(0)
+  const lastClickTime = useRef(0)
   const [draftMeasurement, setDraftMeasurement] = useState<DraftMeasurementState>(null)
   // Base Y of an open Polygon room's ghost sides (its construction plane).
   const [polygonGhostY, setPolygonGhostY] = useState(0)
@@ -884,12 +885,18 @@ const LineWallTool: React.FC = () => {
     const onGridClick = (event: GridEvent) => {
       if (!wallPreviewRef.current || planOwnsInput()) return
 
-      if (buildingState.current === 1 && event.nativeEvent.detail >= 2) {
+      const now = event.nativeEvent?.timeStamp ?? Date.now()
+      if (
+        buildingState.current === 1 &&
+        (event.nativeEvent.detail >= 2 || (lastClickTime.current > 0 && now - lastClickTime.current < 400))
+      ) {
         // A double-click finishes the chain and keeps an open Polygon room.
         commitWallPolygonDraft()
         stopDrafting()
+        lastClickTime.current = 0
         return
       }
+      lastClickTime.current = now
 
       const { walls, snapWalls, bodyWalls } = getWallDraftSnapWalls()
       const pointed = buildingState.current === 0 ? pointedSurfaceFor(event) : null
@@ -1048,11 +1055,7 @@ const LineWallTool: React.FC = () => {
           useAlignmentGuides.getState().clear()
           useWallSnapIndicator.getState().clear()
 
-          // Walls draws one wall per two clicks.
-          if (!wallDraftIsRun()) {
-            stopDrafting()
-            return
-          }
+          // Multi-point wall drafting: continue drawing the next segment from the created wall's end point
 
           const closedToChainStart =
             chainFirstVertex.current &&

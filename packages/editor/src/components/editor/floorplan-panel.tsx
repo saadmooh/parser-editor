@@ -9989,10 +9989,7 @@ export function FloorplanPanel({
         ? (createdWall.end as WallPlanPoint)
         : (publishedNextStart ?? point)
 
-      if (
-        !wallDraftIsRun() ||
-        (wallChainFirstVertex && isWithinWallJoinSnapRadius(nextStart, wallChainFirstVertex))
-      ) {
+      if (wallChainFirstVertex && isWithinWallJoinSnapRadius(nextStart, wallChainFirstVertex)) {
         clearWallPlacementDraft()
         setCursorPoint(null)
         return
