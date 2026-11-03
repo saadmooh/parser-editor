@@ -1,0 +1,16 @@
+export function pcg(v: any): number;
+export function vnoise2(x: any, y: any): number;
+export function mulberry32(seed: any): () => number;
+export function simplex2(xin: any, yin: any): number;
+export function simplex3(xin: any, yin: any, zin: any): number;
+export function fbm2(x: any, y: any, oct?: number, lac?: number, gain?: number): number;
+export function ridged2(x: any, y: any, oct?: number, lac?: number, gain?: number): number;
+export function smin(a: any, b: any, k: any): number;
+export function smax(a: any, b: any, k: any): number;
+export function hash2i(x: any, y: any): number;
+export function hash3i(x: any, y: any, z: any): number;
+export function hashf2(x: any, y: any): number;
+export function hashf3(x: any, y: any, z: any): number;
+export function clamp(x: any, a: any, b: any): any;
+export function lerp(a: any, b: any, t: any): any;
+export function smoothstep(a: any, b: any, x: any): number;

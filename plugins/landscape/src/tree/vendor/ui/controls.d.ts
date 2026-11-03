@@ -1,0 +1,45 @@
+export function controlsFromSpecies(species: any): {
+    seed: number;
+    showLeaves: boolean;
+    tileWorldSize: any;
+    paramOverrides: {};
+    forceDirX: any;
+    forceDirY: any;
+    forceDirZ: any;
+    forceStrength: any;
+    leafColorize: number;
+    leafTintAmount: number;
+    leafAngle: any;
+    leafStart: any;
+    leafSizeVar: any;
+    leafAlpha: any;
+    leafQuads: any;
+    barkTint: any;
+    barkFlat: boolean;
+    frondGreenTint: number;
+    frondDryTint: number;
+    frondDryestTint: number;
+    frondDryness: number;
+    spineTint: number;
+    barkDamage: any;
+};
+export function applySpeciesControls(species: any, c: any): any;
+export const CROWN_SHAPES: {
+    Conical: number;
+    Spherical: number;
+    Hemispherical: number;
+    Cylindrical: number;
+    'Tapered cyl.': number;
+    Flame: number;
+    'Inverse conical': number;
+    'Tend flame': number;
+};
+export const ADVANCED_LEVEL_PARAMS: {
+    key: string;
+    name: string;
+    min: number;
+    max: number;
+    step: number;
+    trunk: boolean;
+    dflt: number;
+}[];

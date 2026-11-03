@@ -1,0 +1,11 @@
+export function barkWindPosition(): import("three/webgpu").Node<"vec3">;
+export function instancedBarkWindPosition(): import("three/webgpu").Node<"vec3">;
+export function foliageWindPosition(withFlutter?: boolean, flutterScale?: number): import("three/webgpu").Node<"vec3">;
+export function rosetteWindPosition(): import("three/webgpu").Node<"vec3">;
+export function grassWindPosition(bladeHeight?: number): import("three/webgpu").Node<"vec3">;
+export function groundCoverWindPosition(amount?: number): import("three/webgpu").Node<"vec3">;
+export const windStrength: import("three/webgpu").UniformNode<"float", number>;
+export const windSpeed: import("three/webgpu").UniformNode<"float", number>;
+export const WIND_DIR: Vector3;
+export const sunDirectionUniform: import("three/webgpu").UniformNode<"vec3", Vector3>;
+import { Vector3 } from 'three/webgpu';

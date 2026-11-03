@@ -288,7 +288,7 @@ function createGlows() {
   })
   material.positionNode = instancedDynamicBufferAttribute(positions)
   material.scaleNode = instancedDynamicBufferAttribute(sizes)
-  material.colorNode = instancedDynamicBufferAttribute(colors, 'vec3')
+  material.colorNode = instancedDynamicBufferAttribute(colors, 'vec3') as any
   // A soft disc: full at the centre, smoothly nothing at the rim.
   const falloff = smoothstep(float(1), float(0), uv().sub(0.5).length().mul(2))
   material.opacityNode = falloff.mul(falloff)
